@@ -12,8 +12,7 @@ the [QMagFace's model](https://github.com/pterhoer/QMagFace) from PyTorch to TF.
 Use the [model_converter.py](model_converter.py) script to convert the PyTorch model to ONNX first, and then the ONNX
 model to TF. 
 
-Some of the code in the [model_converter.py](model_converter.py) is taken from the official [QMagFace's implementation]
-(https://github.com/pterhoer/QMagFace).
+Some of the code in the [model_converter.py](model_converter.py) is taken from the official [QMagFace's implementation](https://github.com/pterhoer/QMagFace).
 
 
 ### Extracting layers
