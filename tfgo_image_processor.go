@@ -5,7 +5,7 @@ import (
 	tf "github.com/galeone/tensorflow/tensorflow/go"
 	"github.com/galeone/tensorflow/tensorflow/go/op"
 	tg "github.com/galeone/tfgo"
-	"github.com/galeone/tfgo/image"
+	tfimage "github.com/galeone/tfgo/image"
 	"os"
 	"strconv"
 )
@@ -23,8 +23,8 @@ func main() {
 	intImgSize, _ := strconv.ParseFloat(imgSize, 32)
 
 	root := tg.NewRoot()
-	img := image.Read(root, filename, 3)
-	img = img.ResizeArea(image.Size{Height: float32(intImgSize), Width: float32(intImgSize)})
+	img := tfimage.Read(root, filename, 3)
+	img = img.ResizeArea(tfimage.Size{Height: float32(intImgSize), Width: float32(intImgSize)})
 	rImg := op.Reshape(root, img.Value(), tg.Const(root, [3]int32{3, int32(intImgSize), int32(intImgSize)}))
 	rImg = op.ExpandDims(root, rImg, tg.Const(root, []int32{0}))
 	results := tg.Exec(root, []tf.Output{rImg}, nil, &tf.SessionOptions{})
@@ -38,8 +38,10 @@ func main() {
 		qmf_model.Op(outputLayer, 0): tensor_img,
 	})
 
-	qmf_predictions := qmf_results[0]
+	fmt.Println("####################### QMF input ######################")
+	fmt.Println(tensor_img.Value())
 	fmt.Println("####################### QMF output ######################")
+	qmf_predictions := qmf_results[0]
 	fmt.Println(qmf_predictions.Value())
 	fmt.Println("#########################################################")
 
