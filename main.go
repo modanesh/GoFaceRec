@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	filename := "./airplane.png"
+	filename := "./obama.jpg"
 
 	img := gocv.IMRead(filename, gocv.IMReadColor)
 	defer img.Close()
@@ -20,7 +20,7 @@ func main() {
 
 	rImg := gocv.NewMat()
 	defer rImg.Close()
-	gocv.Resize(cImg, &rImg, image.Point{112, 112}, 0, 0, gocv.InterpolationLinear)
+	gocv.Resize(cImg, &rImg, image.Point{X: 112, Y: 112}, 0, 0, gocv.InterpolationLinear)
 
 	normalizedImg := gocv.NewMat()
 	defer normalizedImg.Close()
@@ -46,8 +46,8 @@ func main() {
 	fmt.Println("####################### QMF input ######################")
 	fmt.Println(tensorImg.Value())
 	fmt.Println("####################### QMF output ######################")
-	qmf_predictions := qmfResults[0]
-	fmt.Println(qmf_predictions.Value())
+	qmfPredictions := qmfResults[0]
+	fmt.Println(qmfPredictions.Value())
 	fmt.Println("#########################################################")
 
 }
