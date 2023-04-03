@@ -9,11 +9,19 @@ import (
 	"sort"
 )
 
-func min(a, b int) int {
-	if a < b {
-		return a
+func matToFloat64Slice(mat gocv.Mat) [][]float64 {
+	rows, cols := mat.Rows(), mat.Cols()
+	slice := make([][]float64, rows)
+
+	for i := 0; i < rows; i++ {
+		rowSlice := make([]float64, cols)
+		for j := 0; j < cols; j++ {
+			val := mat.GetFloatAt(i, j)
+			rowSlice[j] = float64(val)
+		}
+		slice[i] = rowSlice
 	}
-	return b
+	return slice
 }
 
 func sliceIndex(number int) []int {
@@ -298,6 +306,48 @@ func CalibrateBox(bbox [][]float64, reg [][]float64) [][]float64 {
 	return bbox
 }
 
+func preprocess(img gocv.Mat, bbox []float64, landmark []float64) gocv.Mat {
+	imageSize := [2]int{112, 112}
+	src := [][]float64{
+		[]float64{30.2946, 51.6963},
+		[]float64{65.5318, 51.5014},
+		[]float64{48.0252, 71.7366},
+		[]float64{33.5493, 92.3655},
+		[]float64{62.7299, 92.2041},
+	}
+	if imageSize[1] == 112 {
+		for i := range src {
+			src[i][0] += 8.0
+		}
+	}
+	var dst [][]float64
+	for i := 0; i < len(landmark); i += 2 {
+		dst = append(dst, []float64{landmark[i], landmark[i+1]})
+	}
+
+	M := gocv.EstimateAffinePartial2D(dst, src)
+
+	if M.Empty() {
+		var det []float64
+		if bbox == nil {
+			det = []float64{float64(img.Cols()) * 0.0625, float64(img.Rows()) * 0.0625, float64(img.Cols()) * 0.9375, float64(img.Rows()) * 0.9375}
+		} else {
+			det = bbox
+		}
+		margin := 44
+		bb := []int{int(math.Max(det[0]-float64(margin/2), 0)), int(math.Max(det[1]-float64(margin/2), 0)), int(math.Min(det[2]+float64(margin/2), float64(img.Cols()))), int(math.Min(det[3]+float64(margin/2), float64(img.Rows())))}
+		ret := img.Region(image.Rect(bb[0], bb[1], bb[2], bb[3]))
+		retSize := image.Pt(imageSize[1], imageSize[0])
+		gocv.Resize(ret, &ret, retSize, 0, 0, gocv.InterpolationLinear)
+		return ret
+	} else {
+		warped := gocv.NewMat()
+		imageSizePoint := image.Point{X: imageSize[0], Y: imageSize[1]}
+		gocv.WarpAffine(img, &warped, M, imageSizePoint)
+		return warped
+	}
+}
+
 func main() {
 	filename := "./obama.jpg"
 
@@ -313,7 +363,7 @@ func main() {
 	minsize := 50
 	var scales []float64
 	m := float64(MIN_DET_SIZE) / float64(minsize)
-	minl := float64(min(height, width)) * m
+	minl := float64(math.Min(float64(height), float64(width))) * m
 	factor_count := 0
 	factor := 0.709
 	for minl > float64(MIN_DET_SIZE) {
@@ -321,6 +371,10 @@ func main() {
 		minl *= factor
 		factor_count++
 	}
+
+	//************************************************************************************
+	// detect face
+	//************************************************************************************
 
 	////////////////////////////////////////////
 	// first stage
@@ -494,9 +548,25 @@ func main() {
 
 	var thirdScores [][]float64
 	var thirdReg [][]float64
+	var points [][]float64
 	for _, i := range thirdPassed {
 		thirdScores = append(thirdScores, []float64{output[2][i][1]})
 		thirdReg = append(thirdReg, output[1][i])
+		points = append(points, output[0][i])
+	}
+	bbw := make([]float64, len(thirdScores))
+	bbh := make([]float64, len(thirdScores))
+	for i, box := range thirdScores {
+		bbw[i] = box[2] - box[0] + 1
+		bbh[i] = box[3] - box[1] + 1
+	}
+	for i := range points {
+		for j := 0; j < 5; j++ {
+			points[i][j] = thirdScores[i][0] + bbw[i]*points[i][j]
+		}
+		for j := 5; j < 10; j++ {
+			points[i][j] = thirdScores[i][1] + bbh[i]*points[i][j]
+		}
 	}
 
 	// nms
@@ -504,9 +574,37 @@ func main() {
 	pick = nms(calibratedBoxes, 0.7, "Min")
 
 	var thirdPickedBoxes [][]float64
+	var pickedPoints [][]float64
 	for _, i := range pick {
 		thirdPickedBoxes = append(thirdPickedBoxes, calibratedBoxes[i])
+		pickedPoints = append(pickedPoints, points[i])
 	}
 	fmt.Println("return thirdPickedBoxes")
+
+	//************************************************************************************
+	// align face
+	//************************************************************************************
+	if len(thirdPickedBoxes) == 0 || len(pickedPoints) == 0 {
+		fmt.Println("return nil")
+	}
+
+	var images [][][]float64
+	for i := range points {
+		p := points[i]
+		var p2d [2][5]float64
+		for j := 0; j < 5; j++ {
+			p2d[0][j] = p[j]
+			p2d[1][j] = p[j+5]
+		}
+		p = make([]float64, 10)
+		for j := 0; j < 5; j++ {
+			p[j] = p2d[0][j]
+			p[j+5] = p2d[1][j]
+		}
+		b := thirdPickedBoxes[i]
+		processedImg := preprocess(img, b, p)
+		sliceImg := matToFloat64Slice(processedImg)
+		images = append(images, sliceImg)
+	}
 
 }
