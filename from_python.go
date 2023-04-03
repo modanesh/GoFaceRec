@@ -265,6 +265,39 @@ func flatten(arr [][]float64) []float64 {
 	return res
 }
 
+func CalibrateBox(bbox [][]float64, reg [][]float64) [][]float64 {
+	n := len(bbox)
+	w := make([]float64, n)
+	h := make([]float64, n)
+	for i := 0; i < n; i++ {
+		w[i] = bbox[i][2] - bbox[i][0] + 1
+		h[i] = bbox[i][3] - bbox[i][1] + 1
+	}
+	regM := make([][]float64, n)
+	for i := range regM {
+		regM[i] = make([]float64, 4)
+		regM[i][0] = w[i]
+		regM[i][1] = h[i]
+		regM[i][2] = w[i]
+		regM[i][3] = h[i]
+	}
+	aug := make([][]float64, n)
+	for i := range aug {
+		aug[i] = make([]float64, 4)
+		aug[i][0] = regM[i][0] * reg[i][0]
+		aug[i][1] = regM[i][1] * reg[i][1]
+		aug[i][2] = regM[i][2] * reg[i][2]
+		aug[i][3] = regM[i][3] * reg[i][3]
+	}
+	for i := 0; i < n; i++ {
+		bbox[i][0] += aug[i][0]
+		bbox[i][1] += aug[i][1]
+		bbox[i][2] += aug[i][2]
+		bbox[i][3] += aug[i][3]
+	}
+	return bbox
+}
+
 func main() {
 	filename := "./obama.jpg"
 
@@ -339,18 +372,17 @@ func main() {
 	// pad the bbox
 	dy, edy, dx, edx, y, ey, x, ex, tmpw, tmph := pad(totalBoxes, float64(width), float64(height))
 	// (3, 24, 24) is the input shape for RNet
-	input_buf := make([][][][]float32, numBox)
+	inputBuf := make([][][][]float64, numBox)
 	for i := 0; i < numBox; i++ {
-		input_buf[i] = make([][][]float32, 3)
+		inputBuf[i] = make([][][]float64, 3)
 		for j := 0; j < 3; j++ {
-			input_buf[i][j] = make([][]float32, 24)
+			inputBuf[i][j] = make([][]float64, 24)
 			for k := 0; k < 24; k++ {
-				input_buf[i][j][k] = make([]float32, 24)
+				inputBuf[i][j][k] = make([]float64, 24)
 			}
 		}
 	}
 
-	inputBuf := make([][][]float64, numBox)
 	for i := 0; i < numBox; i++ {
 		tmp := gocv.NewMatWithSize(int(tmph[i]), int(tmpw[i]), gocv.MatTypeCV8UC3)
 		defer tmp.Close()
@@ -364,7 +396,117 @@ func main() {
 		resizedTmp := gocv.NewMat()
 		defer resizedTmp.Close()
 		gocv.Resize(tmp, &resizedTmp, image.Point{X: 24, Y: 24}, 0, 0, gocv.InterpolationDefault)
-		inputBuf[i] = adjustInput(resizedTmp)
+		inputBuf[0][i] = adjustInput(resizedTmp)
 	}
+
+	output := rnet.Predict(inputBuf)
+
+	// filter the total_boxes with threshold
+	var passed []int
+	for i, row := range output[1] {
+		if row[1] > 0.7 {
+			passed = append(passed, i)
+		}
+	}
+	var secondTotalBoxes [][]float64
+	for _, i := range passed {
+		secondTotalBoxes = append(secondTotalBoxes, totalBoxes[i])
+	}
+
+	if len(secondTotalBoxes) == 0 {
+		fmt.Println("return nil")
+	}
+
+	var scores [][]float64
+	var reg [][]float64
+	for _, i := range passed {
+		scores = append(scores, []float64{output[1][i][1]})
+		reg = append(reg, output[0][i])
+	}
+
+	// nms
+	pick := nms(scores, 0.7, "Union")
+	var newPickedBoxes [][]float64
+	var pickedReg [][]float64
+	for _, i := range pick {
+		newPickedBoxes = append(newPickedBoxes, secondTotalBoxes[i])
+		pickedReg = append(pickedReg, reg[i])
+	}
+	calibratedBoxes := CalibrateBox(newPickedBoxes, pickedReg)
+	squaredBoxes := convertToSquare(calibratedBoxes)
+	for i := range squaredBoxes {
+		for j := 0; j < 4; j++ {
+			squaredBoxes[i][j] = math.Round(squaredBoxes[i][j])
+		}
+	}
+
+	////////////////////////////////////////////
+	// third stage
+	////////////////////////////////////////////
+	numBox = len(squaredBoxes)
+	// pad the bbox
+	dy, edy, dx, edx, y, ey, x, ex, tmpw, tmph = pad(squaredBoxes, float64(width), float64(height))
+	// (3, 48, 48) is the input shape for ONet
+	inputBuf = make([][][][]float64, numBox)
+	for i := 0; i < numBox; i++ {
+		inputBuf[i] = make([][][]float64, 3)
+		for j := 0; j < 3; j++ {
+			inputBuf[i][j] = make([][]float64, 48)
+			for k := 0; k < 24; k++ {
+				inputBuf[i][j][k] = make([]float64, 48)
+			}
+		}
+	}
+
+	for i := 0; i < numBox; i++ {
+		tmp := gocv.NewMatWithSize(int(tmph[i]), int(tmpw[i]), gocv.MatTypeCV8UC3)
+		defer tmp.Close()
+		scalar := gocv.NewScalar(0, 0, 0, 0)
+		tmp.SetTo(scalar)
+		roi := img.Region(image.Rect(int(dx[i]), int(dy[i]), int(edx[i]+1), int(edy[i]+1)))
+		defer roi.Close()
+		region := tmp.Region(image.Rect(int(x[i]), int(y[i]), int(ex[i]+1), int(ey[i]+1)))
+		defer region.Close()
+		roi.CopyTo(&region)
+		resizedTmp := gocv.NewMat()
+		defer resizedTmp.Close()
+		gocv.Resize(tmp, &resizedTmp, image.Point{X: 48, Y: 48}, 0, 0, gocv.InterpolationDefault)
+		inputBuf[0][i] = adjustInput(resizedTmp)
+	}
+
+	output = onet.Predict(inputBuf)
+
+	// filter the total_boxes with threshold
+	var thirdPassed []int
+	for i, row := range output[2] {
+		if row[1] > 0.8 {
+			thirdPassed = append(thirdPassed, i)
+		}
+	}
+	var thirdFilteredBoxes [][]float64
+	for _, i := range thirdPassed {
+		thirdFilteredBoxes = append(thirdFilteredBoxes, squaredBoxes[i])
+	}
+
+	if len(thirdFilteredBoxes) == 0 {
+		fmt.Println("return nil")
+	}
+
+	var thirdScores [][]float64
+	var thirdReg [][]float64
+	for _, i := range thirdPassed {
+		thirdScores = append(thirdScores, []float64{output[2][i][1]})
+		thirdReg = append(thirdReg, output[1][i])
+	}
+
+	// nms
+	calibratedBoxes = CalibrateBox(thirdScores, thirdReg)
+	pick = nms(calibratedBoxes, 0.7, "Min")
+
+	var thirdPickedBoxes [][]float64
+	for _, i := range pick {
+		thirdPickedBoxes = append(thirdPickedBoxes, calibratedBoxes[i])
+	}
+	fmt.Println("return thirdPickedBoxes")
 
 }
