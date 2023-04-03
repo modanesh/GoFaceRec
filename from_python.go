@@ -32,12 +32,6 @@ func sliceIndex(number int) []int {
 	return indexes
 }
 
-func generateBbox(scale, threshold) {
-	fmt.Println("alam")
-	fmt.Println(scale)
-	fmt.Println(threshold)
-}
-
 func removeIndex(s []int, idx []int) []int {
 	sort.Ints(idx)
 	offset := 0
@@ -57,7 +51,7 @@ func nms(boxes [][]float64, overlapThreshold float64, mode string) []int {
 	if reflect.TypeOf(boxes[0][0]).Kind() == reflect.Int {
 		for i := range boxes {
 			for j := range boxes[i] {
-				boxes[i][j] = float64(boxes[i][j])
+				boxes[i][j] = boxes[i][j]
 			}
 		}
 	}
@@ -206,7 +200,7 @@ func pad(bboxes [][]float64, w float64, h float64) ([]float64, []float64, []floa
 	copy(ex, bboxes[2])
 	copy(ey, bboxes[3])
 
-	for i, _ := range bboxes {
+	for i := range bboxes {
 		if ex[i] > w-1 {
 			edx[i] = tmpw[i] + w - 2 - ex[i]
 			ex[i] = w - 1
@@ -235,34 +229,34 @@ func pad(bboxes [][]float64, w float64, h float64) ([]float64, []float64, []floa
 	return dy, edy, dx, edx, y, ey, x, ex, tmpw64, tmph64
 }
 
-func adjustInput(in_data gocv.Mat) [][]float64 {
+func adjustInput(inData gocv.Mat) [][]float64 {
 	// adjust the input from (h, w, c) to (1, c, h, w) for network input
-	channels := in_data.Channels()
-	rows, cols := in_data.Rows(), in_data.Cols()
+	channels := inData.Channels()
+	rows, cols := inData.Rows(), inData.Cols()
 
 	// transpose (h, w, c) to (c, h, w)
-	out_data := make([][]float64, channels)
+	outData := make([][]float64, channels)
 	for c := 0; c < channels; c++ {
-		out_data[c] = make([]float64, rows*cols)
+		outData[c] = make([]float64, rows*cols)
 		for i := 0; i < rows; i++ {
 			for j := 0; j < cols; j++ {
-				v := in_data.GetVecfAt(i, j)[c]
-				out_data[c][i*cols+j] = float64(v)
+				v := inData.GetVecfAt(i, j)[c]
+				outData[c][i*cols+j] = float64(v)
 			}
 		}
 	}
 
 	// expand dims to (1, c, h, w)
-	out_data = [][]float64{flatten(out_data)}
+	outData = [][]float64{flatten(outData)}
 
 	// normalize
 	for c := 0; c < channels; c++ {
 		for i := 0; i < rows*cols; i++ {
-			out_data[0][c*rows*cols+i] = (out_data[0][c*rows*cols+i] - 127.5) * 0.0078125
+			outData[0][c*rows*cols+i] = (outData[0][c*rows*cols+i] - 127.5) * 0.0078125
 		}
 	}
 
-	return out_data
+	return outData
 }
 
 func flatten(arr [][]float64) []float64 {
@@ -309,11 +303,11 @@ func CalibrateBox(bbox [][]float64, reg [][]float64) [][]float64 {
 func preprocess(img gocv.Mat, bbox []float64, landmark []float64) gocv.Mat {
 	imageSize := [2]int{112, 112}
 	src := [][]float64{
-		[]float64{30.2946, 51.6963},
-		[]float64{65.5318, 51.5014},
-		[]float64{48.0252, 71.7366},
-		[]float64{33.5493, 92.3655},
-		[]float64{62.7299, 92.2041},
+		{30.2946, 51.6963},
+		{65.5318, 51.5014},
+		{48.0252, 71.7366},
+		{33.5493, 92.3655},
+		{62.7299, 92.2041},
 	}
 	if imageSize[1] == 112 {
 		for i := range src {
@@ -359,17 +353,17 @@ func main() {
 	gocv.CvtColor(img, &cImg, gocv.ColorBGRToRGB)
 	height := cImg.Size()[0]
 	width := cImg.Size()[1]
-	MIN_DET_SIZE := 12
-	minsize := 50
+	minDetSize := 12
+	minSize := 50
 	var scales []float64
-	m := float64(MIN_DET_SIZE) / float64(minsize)
-	minl := float64(math.Min(float64(height), float64(width))) * m
-	factor_count := 0
+	m := float64(minDetSize) / float64(minSize)
+	minL := math.Min(float64(height), float64(width)) * m
+	factorCount := 0
 	factor := 0.709
-	for minl > float64(MIN_DET_SIZE) {
-		scales = append(scales, m*math.Pow(factor, float64(factor_count)))
-		minl *= factor
-		factor_count++
+	for minL > float64(minDetSize) {
+		scales = append(scales, m*math.Pow(factor, float64(factorCount)))
+		minL *= factor
+		factorCount++
 	}
 
 	//************************************************************************************
@@ -411,7 +405,7 @@ func main() {
 		refinedBoxes = append(refinedBoxes, refinedBox)
 	}
 	totalBoxes = convertToSquare(totalBoxes)
-	for i, _ := range totalBoxes {
+	for i := range totalBoxes {
 		totalBoxes[i][0] = math.Round(totalBoxes[i][0])
 		totalBoxes[i][1] = math.Round(totalBoxes[i][1])
 		totalBoxes[i][2] = math.Round(totalBoxes[i][2])
@@ -439,16 +433,16 @@ func main() {
 
 	for i := 0; i < numBox; i++ {
 		tmp := gocv.NewMatWithSize(int(tmph[i]), int(tmpw[i]), gocv.MatTypeCV8UC3)
-		defer tmp.Close()
+		//defer tmp.Close()
 		scalar := gocv.NewScalar(0, 0, 0, 0)
 		tmp.SetTo(scalar)
 		roi := img.Region(image.Rect(int(dx[i]), int(dy[i]), int(edx[i]+1), int(edy[i]+1)))
-		defer roi.Close()
+		//defer roi.Close()
 		region := tmp.Region(image.Rect(int(x[i]), int(y[i]), int(ex[i]+1), int(ey[i]+1)))
-		defer region.Close()
+		//defer region.Close()
 		roi.CopyTo(&region)
 		resizedTmp := gocv.NewMat()
-		defer resizedTmp.Close()
+		//defer resizedTmp.Close()
 		gocv.Resize(tmp, &resizedTmp, image.Point{X: 24, Y: 24}, 0, 0, gocv.InterpolationDefault)
 		inputBuf[0][i] = adjustInput(resizedTmp)
 	}
@@ -514,16 +508,16 @@ func main() {
 
 	for i := 0; i < numBox; i++ {
 		tmp := gocv.NewMatWithSize(int(tmph[i]), int(tmpw[i]), gocv.MatTypeCV8UC3)
-		defer tmp.Close()
+		//defer tmp.Close()
 		scalar := gocv.NewScalar(0, 0, 0, 0)
 		tmp.SetTo(scalar)
 		roi := img.Region(image.Rect(int(dx[i]), int(dy[i]), int(edx[i]+1), int(edy[i]+1)))
-		defer roi.Close()
+		//defer roi.Close()
 		region := tmp.Region(image.Rect(int(x[i]), int(y[i]), int(ex[i]+1), int(ey[i]+1)))
-		defer region.Close()
+		//defer region.Close()
 		roi.CopyTo(&region)
 		resizedTmp := gocv.NewMat()
-		defer resizedTmp.Close()
+		//defer resizedTmp.Close()
 		gocv.Resize(tmp, &resizedTmp, image.Point{X: 48, Y: 48}, 0, 0, gocv.InterpolationDefault)
 		inputBuf[0][i] = adjustInput(resizedTmp)
 	}
@@ -607,4 +601,13 @@ func main() {
 		images = append(images, sliceImg)
 	}
 
+	//************************************************************************************
+	// recognize face
+	//************************************************************************************
+	if len(images) == 0 {
+		fmt.Println("return nil")
+	}
+	// up to line 223 of the webrtc_experiment:
+	// ids, scores = custom_data_main(faces, reg_embs=reg_embeddings, reg_files=reg_filenames,
+	//                                       magface=qmagface, qmf=qmf, target_th=threshold)
 }
