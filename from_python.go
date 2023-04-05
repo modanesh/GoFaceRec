@@ -2,12 +2,41 @@ package main
 
 import (
 	"fmt"
+	"github.com/nfnt/resize"
 	"gocv.io/x/gocv"
+	"gonum.org/v1/gonum/mat"
+	"gonum.org/v1/gonum/stat"
+	"gorgonia.org/tensor"
 	"image"
+	"image/color"
 	"math"
 	"reflect"
 	"sort"
 )
+
+// FloatImage represents a custom image type that satisfies the image.Image interface
+type FloatImage struct {
+	data [][]float64
+}
+
+func (f FloatImage) ColorModel() color.Model {
+	return color.Gray16Model
+}
+
+func (f FloatImage) Bounds() image.Rectangle {
+	height := len(f.data)
+	width := len(f.data[0])
+	return image.Rect(0, 0, width, height)
+}
+
+func (f FloatImage) At(x, y int) color.Color {
+	return color.Gray16{Y: uint16(f.data[y][x])}
+}
+
+// ConvertFloatImage converts [][]float64 to FloatImage
+func ConvertFloatImage(data [][]float64) *FloatImage {
+	return &FloatImage{data: data}
+}
 
 func matToFloat64Slice(mat gocv.Mat) [][]float64 {
 	rows, cols := mat.Rows(), mat.Cols()
@@ -342,6 +371,121 @@ func preprocess(img gocv.Mat, bbox []float64, landmark []float64) gocv.Mat {
 	}
 }
 
+func ConvertToFloats(img image.Image) [][]float64 {
+	bounds := img.Bounds()
+	height := bounds.Dy()
+	width := bounds.Dx()
+
+	data := make([][]float64, height)
+	for y := 0; y < height; y++ {
+		data[y] = make([]float64, width)
+		for x := 0; x < width; x++ {
+			grayColor := color.GrayModel.Convert(img.At(x, y)).(color.Gray)
+			data[y][x] = float64(grayColor.Y)
+		}
+	}
+
+	return data
+}
+
+func generateEmbeddings(imgs [][][]float64) *tensor.Dense {
+	mean := []float64{0.0, 0.0, 0.0}
+	std := []float64{1.0, 1.0, 1.0}
+	trans := tensor.New(tensor.WithShape(3), tensor.WithBacking([]float64{
+		(1.0 / std[0]), 0.0, 0.0,
+		0.0, (1.0 / std[1]), 0.0,
+		0.0, 0.0, (1.0 / std[2]),
+	}))
+
+	permutedImgs := tensor.New(tensor.WithShape(len(imgs), 3, len(imgs[0]), len(imgs[0][0])), tensor.WithBacking(make([]float64, len(imgs)*3*len(imgs[0])*len(imgs[0][0]))))
+	for i, img := range imgs {
+		imageImage := ConvertFloatImage(img)
+		listImg := resize.Resize(224, 224, imageImage, resize.Lanczos3)
+		img = ConvertToFloats(listImg)
+		for y := 0; y < len(img); y++ {
+			for x := 0; x < len(img[y]); x++ {
+				pixel := img[y][x]
+				permutedImgs.SetAt(pixel/255.0-mean[2], i, 2, y, x)
+			}
+		}
+	}
+	transformedImgs := tensor.New(tensor.WithShape(len(imgs), 3, 224, 224), tensor.WithBacking(make([]float64, len(imgs)*3*224*224)))
+	tensor.Transpose(permutedImgs, 0, 3, 1, 2)
+	tensor.Mul(transformedImgs, trans)
+	return transformedImgs
+}
+
+func similarityNoPair(fAnch, fTest *mat.Dense, isNormed bool) []float64 {
+	n1, d1 := fAnch.Dims()
+	n2, _ := fTest.Dims()
+
+	if !isNormed {
+		fAnch = norm(fAnch)
+		fTest = norm(fTest)
+	}
+
+	fMul := mat.NewDense(n1*n2, d1, nil)
+	counter := 0
+	for i := 0; i < n1; i++ {
+		for j := 0; j < n2; j++ {
+			fMul.SetRow(counter, elementwiseMul(fAnch.RowView(i), fTest.RowView(j)))
+			counter++
+		}
+	}
+
+	sum := make([]float64, n1*n2)
+	for i := 0; i < n1*n2; i++ {
+		row := fMul.RowView(i)
+		for j := 0; j < d1; j++ {
+			sum[i] += row.At(j, 0)
+		}
+	}
+
+	return sum
+}
+
+func norm(m *mat.Dense) *mat.Dense {
+	r, c := m.Dims()
+	normed := mat.NewDense(r, c, nil)
+	for i := 0; i < r; i++ {
+		row := m.RawRowView(i)
+		norm := stat.StdDev(row, nil)
+		for j := 0; j < c; j++ {
+			normed.Set(i, j, row[j]/norm)
+		}
+	}
+	return normed
+}
+
+func elementwiseMul(v1, v2 mat.Vector) []float64 {
+	n := v1.Len()
+	result := make([]float64, n)
+	for i := 0; i < n; i++ {
+		result[i] = v1.At(i, 0) * v2.At(i, 0)
+	}
+	return result
+}
+
+func computeSQNoPair(fAnchor, fTest *mat.Dense) ([]float64, []float64) {
+	fAnchorNorm := norm(fAnchor)
+	fTestNorm := norm(fTest)
+
+	s := similarityNoPair(fAnchorNorm, fTestNorm, true)
+
+	n1, _ := qAnchor.Dims()
+	n2, _ := qTest.Dims()
+	q := make([]float64, n1*n2)
+	counter := 0
+	for i := 0; i < n1; i++ {
+		for j := 0; j < n2; j++ {
+			q[counter] = math.Min(qAnchor.At(i, 0), qTest.At(j, 0))
+			counter++
+		}
+	}
+
+	return s, q
+}
+
 func main() {
 	filename := "./obama.jpg"
 
@@ -607,7 +751,10 @@ func main() {
 	if len(images) == 0 {
 		fmt.Println("return nil")
 	}
-	// up to line 223 of the webrtc_experiment:
-	// ids, scores = custom_data_main(faces, reg_embs=reg_embeddings, reg_files=reg_filenames,
-	//                                       magface=qmagface, qmf=qmf, target_th=threshold)
+	transformedFaces := generateEmbeddings(images)
+	embeddings := magface(transformedFaces)
+
+	// until qmagface.py line 24:
+	// s, q = self._compute_s_q_no_pair(f_anch, f_test)
+
 }
