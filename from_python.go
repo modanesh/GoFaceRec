@@ -3,15 +3,17 @@ package main
 import (
 	"fmt"
 	"github.com/nfnt/resize"
+	"github.com/sbinet/npyio"
 	"gocv.io/x/gocv"
-	"gonum.org/v1/gonum/mat"
-	"gonum.org/v1/gonum/stat"
 	"gorgonia.org/tensor"
 	"image"
 	"image/color"
 	"math"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 )
 
 // FloatImage represents a custom image type that satisfies the image.Image interface
@@ -329,44 +331,71 @@ func CalibrateBox(bbox [][]float64, reg [][]float64) [][]float64 {
 	return bbox
 }
 
-func preprocess(img gocv.Mat, bbox []float64, landmark []float64) gocv.Mat {
-	imageSize := [2]int{112, 112}
-	src := [][]float64{
-		{30.2946, 51.6963},
-		{65.5318, 51.5014},
-		{48.0252, 71.7366},
-		{33.5493, 92.3655},
-		{62.7299, 92.2041},
-	}
-	if imageSize[1] == 112 {
-		for i := range src {
-			src[i][0] += 8.0
-		}
-	}
-	var dst [][]float64
-	for i := 0; i < len(landmark); i += 2 {
-		dst = append(dst, []float64{landmark[i], landmark[i+1]})
+func float64SliceToPoint2fSlice(float64Slice []float64) []gocv.Point2f {
+	if len(float64Slice)%2 != 0 {
+		panic("float64Slice length must be even.")
 	}
 
-	M := gocv.EstimateAffinePartial2D(dst, src)
+	point2fSlice := make([]gocv.Point2f, len(float64Slice)/2)
+
+	for i := 0; i < len(float64Slice); i += 2 {
+		point2fSlice[i/2] = gocv.Point2f{X: float32(float64Slice[i]), Y: float32(float64Slice[i+1])}
+	}
+
+	return point2fSlice
+}
+
+func preprocess(img gocv.Mat, bbox []float64, landmark []gocv.Point2f) gocv.Mat {
+	var M gocv.Mat
+	imageSize := []int{112, 112}
+
+	if landmark != nil {
+		src := []gocv.Point2f{
+			{X: 30.2946, Y: 51.6963},
+			{X: 65.5318, Y: 51.5014},
+			{X: 48.0252, Y: 71.7366},
+			{X: 33.5493, Y: 92.3655},
+			{X: 62.7299, Y: 92.2041},
+		}
+
+		if imageSize[1] == 112 {
+			for i := range src {
+				src[i].X += 8.0
+			}
+		}
+
+		dst := gocv.NewPoint2fVectorFromPoints(landmark)
+		srcVec := gocv.NewPoint2fVectorFromPoints(src)
+
+		M = gocv.EstimateAffine2D(dst, srcVec)
+	}
 
 	if M.Empty() {
 		var det []float64
 		if bbox == nil {
-			det = []float64{float64(img.Cols()) * 0.0625, float64(img.Rows()) * 0.0625, float64(img.Cols()) * 0.9375, float64(img.Rows()) * 0.9375}
+			det = make([]float64, 4)
+			det[0] = float64(img.Cols()) * 0.0625
+			det[1] = float64(img.Rows()) * 0.0625
+			det[2] = float64(img.Cols()) - det[0]
+			det[3] = float64(img.Rows()) - det[1]
 		} else {
 			det = bbox
 		}
 		margin := 44
-		bb := []int{int(math.Max(det[0]-float64(margin/2), 0)), int(math.Max(det[1]-float64(margin/2), 0)), int(math.Min(det[2]+float64(margin/2), float64(img.Cols()))), int(math.Min(det[3]+float64(margin/2), float64(img.Rows())))}
+		bb := make([]int, 4)
+		bb[0] = int(math.Max(det[0]-float64(margin/2), 0))
+		bb[1] = int(math.Max(det[1]-float64(margin/2), 0))
+		bb[2] = int(math.Min(det[2]+float64(margin/2), float64(img.Cols())))
+		bb[3] = int(math.Min(det[3]+float64(margin/2), float64(img.Rows())))
+
 		ret := img.Region(image.Rect(bb[0], bb[1], bb[2], bb[3]))
-		retSize := image.Pt(imageSize[1], imageSize[0])
-		gocv.Resize(ret, &ret, retSize, 0, 0, gocv.InterpolationLinear)
+		if len(imageSize) > 0 {
+			gocv.Resize(ret, &ret, image.Point{X: imageSize[1], Y: imageSize[0]}, 0, 0, gocv.InterpolationLinear)
+		}
 		return ret
 	} else {
 		warped := gocv.NewMat()
-		imageSizePoint := image.Point{X: imageSize[0], Y: imageSize[1]}
-		gocv.WarpAffine(img, &warped, M, imageSizePoint)
+		gocv.WarpAffine(img, &warped, M, image.Point{X: imageSize[1], Y: imageSize[0]})
 		return warped
 	}
 }
@@ -415,75 +444,122 @@ func generateEmbeddings(imgs [][][]float64) *tensor.Dense {
 	return transformedImgs
 }
 
-func similarityNoPair(fAnch, fTest *mat.Dense, isNormed bool) []float64 {
-	n1, d1 := fAnch.Dims()
-	n2, _ := fTest.Dims()
-
-	if !isNormed {
-		fAnch = norm(fAnch)
-		fTest = norm(fTest)
+func normalize(vecs [][]float64) ([][]float64, []float64) {
+	r := len(vecs)
+	c := len(vecs[0])
+	norms := make([]float64, r)
+	for i := 0; i < r; i++ {
+		norm := 0.0
+		for _, v := range vecs[i] {
+			norm += v * v
+		}
+		norms[i] = math.Sqrt(norm)
 	}
+	normed := make([][]float64, r)
+	for i := 0; i < r; i++ {
+		normed[i] = make([]float64, c)
+		for j := 0; j < c; j++ {
+			normed[i][j] = vecs[i][j] / norms[i]
+		}
+	}
+	return normed, norms
+}
 
-	fMul := mat.NewDense(n1*n2, d1, nil)
+func cosineSimilarityNoPair(fAnch, fTest [][]float64, isNormed bool) []float64 {
+	if !isNormed {
+		fAnch, _ = normalize(fAnch)
+		fTest, _ = normalize(fTest)
+	}
+	r1 := len(fAnch)
+	r2 := len(fTest)
+
+	result := make([]float64, r1*r2)
 	counter := 0
-	for i := 0; i < n1; i++ {
-		for j := 0; j < n2; j++ {
-			fMul.SetRow(counter, elementwiseMul(fAnch.RowView(i), fTest.RowView(j)))
+
+	for i := 0; i < r1; i++ {
+		for j := 0; j < r2; j++ {
+			sum := 0.0
+			for k := range fAnch[i] {
+				sum += fAnch[i][k] * fTest[j][k]
+			}
+			result[counter] = sum
 			counter++
 		}
 	}
 
-	sum := make([]float64, n1*n2)
-	for i := 0; i < n1*n2; i++ {
-		row := fMul.RowView(i)
-		for j := 0; j < d1; j++ {
-			sum[i] += row.At(j, 0)
+	return result
+}
+
+func computeSQNoPair(fAnchor, fTest [][]float64) ([]float64, []float64) {
+	fAnchor, qAnchor := normalize(fAnchor)
+	fTest, qTest := normalize(fTest)
+	s := cosineSimilarityNoPair(fAnchor, fTest, true)
+
+	q := make([]float64, len(qAnchor)*len(qTest))
+	counter := 0
+	for _, i := range qAnchor {
+		for _, j := range qTest {
+			q[counter] = math.Min(i, j)
+			counter++
+		}
+	}
+	return s, q
+}
+
+func similarityNoPair(fAnch [][]float64, fTest [][]float64) []float64 {
+	s, q := computeSQNoPair(fAnch, fTest)
+	alpha := 0.077428
+	beta := 0.125926
+	omega := make([]float64, len(s))
+	for i, v := range s {
+		omega[i] = beta*v - alpha
+		if omega[i] >= 0 {
+			omega[i] = 0
 		}
 	}
 
-	return sum
-}
-
-func norm(m *mat.Dense) *mat.Dense {
-	r, c := m.Dims()
-	normed := mat.NewDense(r, c, nil)
-	for i := 0; i < r; i++ {
-		row := m.RawRowView(i)
-		norm := stat.StdDev(row, nil)
-		for j := 0; j < c; j++ {
-			normed.Set(i, j, row[j]/norm)
-		}
-	}
-	return normed
-}
-
-func elementwiseMul(v1, v2 mat.Vector) []float64 {
-	n := v1.Len()
-	result := make([]float64, n)
-	for i := 0; i < n; i++ {
-		result[i] = v1.At(i, 0) * v2.At(i, 0)
+	result := make([]float64, len(s))
+	for i := range s {
+		result[i] = omega[i]*q[i] + s[i]
 	}
 	return result
 }
 
-func computeSQNoPair(fAnchor, fTest *mat.Dense) ([]float64, []float64) {
-	fAnchorNorm := norm(fAnchor)
-	fTestNorm := norm(fTest)
+func loadNpy(filePath string) ([][]float64, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
 
-	s := similarityNoPair(fAnchorNorm, fTestNorm, true)
-
-	n1, _ := qAnchor.Dims()
-	n2, _ := qTest.Dims()
-	q := make([]float64, n1*n2)
-	counter := 0
-	for i := 0; i < n1; i++ {
-		for j := 0; j < n2; j++ {
-			q[counter] = math.Min(qAnchor.At(i, 0), qTest.At(j, 0))
-			counter++
-		}
+	var matrix [][]float64
+	if err := npyio.Read(file, &matrix); err != nil {
+		return nil, err
 	}
 
-	return s, q
+	return matrix, nil
+}
+
+func getRegFiles(regDataPath string) ([]string, error) {
+	var regFiles []string
+
+	err := filepath.Walk(regDataPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if !info.IsDir() && (strings.HasSuffix(path, ".png") || strings.HasSuffix(path, ".jpg")) {
+			regFiles = append(regFiles, path)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return regFiles, nil
 }
 
 func main() {
@@ -740,7 +816,8 @@ func main() {
 			p[j+5] = p2d[1][j]
 		}
 		b := thirdPickedBoxes[i]
-		processedImg := preprocess(img, b, p)
+		pPoint2f := float64SliceToPoint2fSlice(p)
+		processedImg := preprocess(img, b, pPoint2f)
 		sliceImg := matToFloat64Slice(processedImg)
 		images = append(images, sliceImg)
 	}
@@ -752,9 +829,48 @@ func main() {
 		fmt.Println("return nil")
 	}
 	transformedFaces := generateEmbeddings(images)
-	embeddings := magface(transformedFaces)
+	frameEmbeddings := magface(transformedFaces)
 
-	// until qmagface.py line 24:
-	// s, q = self._compute_s_q_no_pair(f_anch, f_test)
+	filePath := "./reg_embeddings.npy"
+	regEmbeddings, err := loadNpy(filePath)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+	qmfScores := similarityNoPair(frameEmbeddings, regEmbeddings)
+	regFiles, _ := getRegFiles("./_data/aligned_camera_data_anchor")
+	bSize := len(regFiles)
+	nB := int(math.Ceil(float64(len(qmfScores)) / float64(bSize)))
 
+	classIDs := make([]string, nB)
+	recScores := make([]float64, nB)
+	targetTh := -0.4
+
+	for i := 0; i < nB; i++ {
+		startIndex := i * bSize
+		endIndex := (i + 1) * bSize
+		if endIndex > len(qmfScores) {
+			endIndex = len(qmfScores)
+		}
+		qmfSlice := qmfScores[startIndex:endIndex]
+
+		maxScore := qmfSlice[0]
+		maxIndex := 0
+		for j, score := range qmfSlice {
+			if score > maxScore {
+				maxScore = score
+				maxIndex = j
+			}
+		}
+
+		if maxScore > targetTh {
+			classIDs[i] = filepath.Base(filepath.Dir(regFiles[maxIndex]))
+		} else {
+			classIDs[i] = "unknown"
+		}
+		recScores[i] = maxScore
+	}
+
+	fmt.Println(classIDs)
+	fmt.Println(recScores)
 }
