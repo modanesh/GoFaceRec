@@ -165,6 +165,57 @@ func nms(boxes [][]float64, overlapThreshold float64, mode string) []int {
 	return pick
 }
 
+func generateBBox(heatmap [][]float64, reg [][][][]float64, scale float64, threshold float64) [][]float64 {
+	stride := 2
+	cellsize := 12
+
+	tIndex := make([][]int, 0)
+
+	for i, row := range heatmap {
+		for j, value := range row {
+			if value > threshold {
+				tIndex = append(tIndex, []int{i, j})
+			}
+		}
+	}
+
+	if len(tIndex) == 0 {
+		return [][]float64{}
+	}
+
+	dx1, dy1, dx2, dy2 := make([]float64, len(tIndex)), make([]float64, len(tIndex)), make([]float64, len(tIndex)), make([]float64, len(tIndex))
+	for i, idx := range tIndex {
+		dx1[i] = reg[0][0][idx[0]][idx[1]]
+		dy1[i] = reg[0][1][idx[0]][idx[1]]
+		dx2[i] = reg[0][2][idx[0]][idx[1]]
+		dy2[i] = reg[0][3][idx[0]][idx[1]]
+	}
+
+	score := make([]float64, len(tIndex))
+	for i, idx := range tIndex {
+		score[i] = heatmap[idx[0]][idx[1]]
+	}
+
+	boundingBox := make([][]float64, len(tIndex))
+	for i := range boundingBox {
+		boundingBox[i] = make([]float64, 9)
+	}
+
+	for i, idx := range tIndex {
+		boundingBox[i][0] = math.Round((float64(stride*idx[1] + 1)) / scale)
+		boundingBox[i][1] = math.Round((float64(stride*idx[0] + 1)) / scale)
+		boundingBox[i][2] = math.Round((float64(stride*idx[1] + 1 + cellsize)) / scale)
+		boundingBox[i][3] = math.Round((float64(stride*idx[0] + 1 + cellsize)) / scale)
+		boundingBox[i][4] = score[i]
+		boundingBox[i][5] = dx1[i]
+		boundingBox[i][6] = dy1[i]
+		boundingBox[i][7] = dx2[i]
+		boundingBox[i][8] = dy2[i]
+	}
+
+	return boundingBox
+}
+
 func detectFirstStage(img gocv.Mat, net gocv.Net, scale float64, threshold float64) [][]float64 {
 	height, width := img.Size()[0], img.Size()[1]
 	ws := int(math.Ceil(float64(width) * scale))
@@ -176,7 +227,7 @@ func detectFirstStage(img gocv.Mat, net gocv.Net, scale float64, threshold float
 
 	inputBuf := adjustInput(imData)
 	netOutput := net.predict(inputBuf)
-	boxes := generateBbox(netOutput[1], netOutput[0], scale, threshold)
+	boxes := generateBBox(netOutput[1], netOutput[0], scale, threshold)
 
 	if len(boxes) == 0 {
 		return nil
@@ -421,9 +472,9 @@ func generateEmbeddings(imgs [][][]float64) *tensor.Dense {
 	mean := []float64{0.0, 0.0, 0.0}
 	std := []float64{1.0, 1.0, 1.0}
 	trans := tensor.New(tensor.WithShape(3), tensor.WithBacking([]float64{
-		(1.0 / std[0]), 0.0, 0.0,
-		0.0, (1.0 / std[1]), 0.0,
-		0.0, 0.0, (1.0 / std[2]),
+		1.0 / std[0], 0.0, 0.0,
+		0.0, 1.0 / std[1], 0.0,
+		0.0, 0.0, 1.0 / std[2],
 	}))
 
 	permutedImgs := tensor.New(tensor.WithShape(len(imgs), 3, len(imgs[0]), len(imgs[0][0])), tensor.WithBacking(make([]float64, len(imgs)*3*len(imgs[0])*len(imgs[0][0]))))
