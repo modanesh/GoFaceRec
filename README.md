@@ -48,5 +48,5 @@ Knowing the input and output layers' names, `serving_default_inputs_input:0` and
 essential to run the model in tfgo.
 
 
-### Run the model
+### Running the model
 
