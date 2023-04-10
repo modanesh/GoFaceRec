@@ -28,21 +28,21 @@ func main() {
 	rImg := op.Reshape(root, img.Value(), tg.Const(root, [3]int32{3, int32(intImgSize), int32(intImgSize)}))
 	rImg = op.ExpandDims(root, rImg, tg.Const(root, []int32{0}))
 	results := tg.Exec(root, []tf.Output{rImg}, nil, &tf.SessionOptions{})
-	tensor_img, _ := tf.NewTensor(results[0].Value())
+	tensorImg, _ := tf.NewTensor(results[0].Value())
 
-	qmf_model := tg.LoadModel(modelPath, []string{"serve"}, nil)
+	qmfModel := tg.LoadModel(modelPath, []string{"serve"}, nil)
 
-	qmf_results := qmf_model.Exec([]tf.Output{
-		qmf_model.Op(inputLayer, 0),
+	qmfResults := qmfModel.Exec([]tf.Output{
+		qmfModel.Op(inputLayer, 0),
 	}, map[tf.Output]*tf.Tensor{
-		qmf_model.Op(outputLayer, 0): tensor_img,
+		qmfModel.Op(outputLayer, 0): tensorImg,
 	})
 
 	fmt.Println("####################### QMF input ######################")
-	fmt.Println(tensor_img.Value())
+	fmt.Println(tensorImg.Value())
 	fmt.Println("####################### QMF output ######################")
-	qmf_predictions := qmf_results[0]
-	fmt.Println(qmf_predictions.Value())
+	qmfPredictions := qmfResults[0]
+	fmt.Println(qmfPredictions.Value())
 	fmt.Println("#########################################################")
 
 }
