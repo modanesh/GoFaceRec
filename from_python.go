@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	tf "github.com/galeone/tensorflow/tensorflow/go"
+	tg "github.com/galeone/tfgo"
 	"github.com/nfnt/resize"
 	"github.com/sbinet/npyio"
 	"gocv.io/x/gocv"
@@ -216,7 +218,42 @@ func generateBBox(heatmap [][]float64, reg [][][][]float64, scale float64, thres
 	return boundingBox
 }
 
-func detectFirstStage(img gocv.Mat, net gocv.Net, scale float64, threshold float64) [][]float64 {
+func flatten4DTo2D(data [][][][]float64) [][]float64 {
+	result := make([][]float64, 0)
+
+	for i := range data {
+		for j := range data[i] {
+			for k := range data[i][j] {
+				temp := make([]float64, 0)
+				for l := range data[i][j][k] {
+					temp = append(temp, data[i][j][k][l])
+				}
+				result = append(result, temp)
+			}
+		}
+	}
+
+	return result
+}
+
+func flatten4DTo3D(data [][][][]float64) [][][]float64 {
+	result := make([][][]float64, len(data))
+
+	for i := range data {
+		result[i] = make([][]float64, len(data[i]))
+		for j := range data[i] {
+			temp := make([]float64, 0)
+			for k := range data[i][j] {
+				temp = append(temp, data[i][j][k]...)
+			}
+			result[i][j] = temp
+		}
+	}
+
+	return result
+}
+
+func detectFirstStage(img gocv.Mat, net *tg.Model, scale float64, threshold float64) [][]float64 {
 	height, width := img.Size()[0], img.Size()[1]
 	ws := int(math.Ceil(float64(width) * scale))
 	hs := int(math.Ceil(float64(height) * scale))
@@ -226,8 +263,22 @@ func detectFirstStage(img gocv.Mat, net gocv.Net, scale float64, threshold float
 	gocv.Resize(img, &imData, image.Point{X: ws, Y: hs}, 0, 0, gocv.InterpolationLinear)
 
 	inputBuf := adjustInput(imData)
-	netOutput := net.predict(inputBuf)
-	boxes := generateBBox(netOutput[1], netOutput[0], scale, threshold)
+	inputBufTensor, _ := tf.NewTensor(inputBuf)
+	netOutput := net.Exec([]tf.Output{
+		net.Op("PartitionedCall", 0),
+		net.Op("PartitionedCall", 1),
+	}, map[tf.Output]*tf.Tensor{
+		net.Op("serving_default_input_1", 0): inputBufTensor,
+	})
+	reg, ok := netOutput[0].Value().([][][][]float64)
+	if !ok {
+		fmt.Println("Failed to convert reg to [][][][]float64")
+	}
+	heatmap, ok := netOutput[1].Value().([][][][]float64)
+	if !ok {
+		fmt.Println("Failed to convert heatmap to [][]float64")
+	}
+	boxes := generateBBox(flatten4DTo2D(heatmap), reg, scale, threshold)
 
 	if len(boxes) == 0 {
 		return nil
@@ -329,7 +380,7 @@ func adjustInput(inData gocv.Mat) [][]float64 {
 	}
 
 	// expand dims to (1, c, h, w)
-	outData = [][]float64{flatten(outData)}
+	outData = [][]float64{flatten2DTo1D(outData)}
 
 	// normalize
 	for c := 0; c < channels; c++ {
@@ -341,12 +392,51 @@ func adjustInput(inData gocv.Mat) [][]float64 {
 	return outData
 }
 
-func flatten(arr [][]float64) []float64 {
+func flatten2DTo1D(arr [][]float64) []float64 {
 	var res []float64
 	for _, a := range arr {
 		res = append(res, a...)
 	}
 	return res
+}
+
+func flatten4DTo1D(data [][][][]float64) []float64 {
+	result := make([]float64, 0)
+
+	for i := range data {
+		for j := range data[i] {
+			for k := range data[i][j] {
+				for l := range data[i][j][k] {
+					result = append(result, data[i][j][k][l])
+				}
+			}
+		}
+	}
+
+	return result
+}
+
+func tensorsToFloat64Slices(tensors []*tf.Tensor) ([][]float64, error) {
+	result := make([][]float64, len(tensors))
+
+	for i, t := range tensors {
+		// Get the data from the *tf.Tensor as a 1D []float32 slice
+		data, ok := t.Value().([]float32)
+		if !ok {
+			return nil, fmt.Errorf("expected tensor to be of type []float32, but got %T", t.Value())
+		}
+
+		// Convert the []float32 to []float64
+		float64Data := make([]float64, len(data))
+		for j, v := range data {
+			float64Data[j] = float64(v)
+		}
+
+		// Append the []float64 to the result
+		result[i] = float64Data
+	}
+
+	return result, nil
 }
 
 func CalibrateBox(bbox [][]float64, reg [][]float64) [][]float64 {
@@ -557,6 +647,34 @@ func computeSQNoPair(fAnchor, fTest [][]float64) ([]float64, []float64) {
 	return s, q
 }
 
+func denseToTFTensor(dense *tensor.Dense) (*tf.Tensor, error) {
+	shape := dense.Shape()
+	data := dense.Data().([]float32) // Assuming the data type is float32
+
+	// Reshape the data to a 1D slice
+	reshapedData := make([]float32, 0, len(data))
+	for _, v := range data {
+		reshapedData = append(reshapedData, v)
+	}
+
+	// Create a *tf.Tensor from the reshaped data
+	tensor, err := tf.NewTensor(reshapedData)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert tensor.Shape to []int64
+	int64Shape := make([]int64, len(shape))
+	for i, dim := range shape {
+		int64Shape[i] = int64(dim)
+	}
+
+	// Reshape the *tf.Tensor to match the original shape
+	tensor.Reshape(int64Shape)
+
+	return tensor, nil
+}
+
 func similarityNoPair(fAnch [][]float64, fTest [][]float64) []float64 {
 	s, q := computeSQNoPair(fAnch, fTest)
 	alpha := 0.077428
@@ -644,6 +762,7 @@ func main() {
 	////////////////////////////////////////////
 	// first stage
 	////////////////////////////////////////////
+	pnetModel := tg.LoadModel("./mtcnn_pb/pnet_pb", []string{"serve"}, nil)
 	slicedIndex := sliceIndex(len(scales))
 	var totalBoxes [][]float64
 	for _, batch := range slicedIndex {
@@ -686,6 +805,7 @@ func main() {
 	////////////////////////////////////////////
 	// second stage
 	////////////////////////////////////////////
+	rnetModel := tg.LoadModel("./mtcnn_pb/rnet_pb", []string{"serve"}, nil)
 	numBox := len(totalBoxes)
 
 	// pad the bbox
@@ -718,11 +838,21 @@ func main() {
 		inputBuf[0][i] = adjustInput(resizedTmp)
 	}
 
-	output := rnet.Predict(inputBuf)
+	inputBufTensor, _ := tf.NewTensor(inputBuf)
+	output := rnetModel.Exec([]tf.Output{
+		rnetModel.Op("PartitionedCall", 0),
+	}, map[tf.Output]*tf.Tensor{
+		rnetModel.Op("serving_default_input_2", 0): inputBufTensor,
+	})
+	rNetOutput, ok := output[0].Value().([][][][]float64)
+	if !ok {
+		fmt.Println("Failed to convert rNetOutput to [][][][]float64")
+	}
+	flattenOutput := flatten4DTo3D(rNetOutput)
 
 	// filter the total_boxes with threshold
 	var passed []int
-	for i, row := range output[1] {
+	for i, row := range flattenOutput[1] {
 		if row[1] > 0.7 {
 			passed = append(passed, i)
 		}
@@ -739,8 +869,8 @@ func main() {
 	var scores [][]float64
 	var reg [][]float64
 	for _, i := range passed {
-		scores = append(scores, []float64{output[1][i][1]})
-		reg = append(reg, output[0][i])
+		scores = append(scores, []float64{flattenOutput[1][i][1]})
+		reg = append(reg, flattenOutput[0][i])
 	}
 
 	// nms
@@ -762,6 +892,7 @@ func main() {
 	////////////////////////////////////////////
 	// third stage
 	////////////////////////////////////////////
+	onetModel := tg.LoadModel("./mtcnn_pb/onet_pb", []string{"serve"}, nil)
 	numBox = len(squaredBoxes)
 	// pad the bbox
 	dy, edy, dx, edx, y, ey, x, ex, tmpw, tmph = pad(squaredBoxes, float64(width), float64(height))
@@ -793,11 +924,21 @@ func main() {
 		inputBuf[0][i] = adjustInput(resizedTmp)
 	}
 
-	output = onet.Predict(inputBuf)
+	inputBufTensorOnet, _ := tf.NewTensor(inputBuf)
+	onetOutput := onetModel.Exec([]tf.Output{
+		onetModel.Op("PartitionedCall", 0),
+	}, map[tf.Output]*tf.Tensor{
+		onetModel.Op("serving_default_input_3", 0): inputBufTensorOnet,
+	})
+	oNetOutput, ok := onetOutput[0].Value().([][][][]float64)
+	if !ok {
+		fmt.Println("Failed to convert oNetOutput to [][][][]float64")
+	}
+	flattenOutput = flatten4DTo3D(oNetOutput)
 
 	// filter the total_boxes with threshold
 	var thirdPassed []int
-	for i, row := range output[2] {
+	for i, row := range flattenOutput[2] {
 		if row[1] > 0.8 {
 			thirdPassed = append(thirdPassed, i)
 		}
@@ -815,9 +956,9 @@ func main() {
 	var thirdReg [][]float64
 	var points [][]float64
 	for _, i := range thirdPassed {
-		thirdScores = append(thirdScores, []float64{output[2][i][1]})
-		thirdReg = append(thirdReg, output[1][i])
-		points = append(points, output[0][i])
+		thirdScores = append(thirdScores, []float64{flattenOutput[2][i][1]})
+		thirdReg = append(thirdReg, flattenOutput[1][i])
+		points = append(points, flattenOutput[0][i])
 	}
 	bbw := make([]float64, len(thirdScores))
 	bbh := make([]float64, len(thirdScores))
@@ -876,11 +1017,18 @@ func main() {
 	//************************************************************************************
 	// recognize face
 	//************************************************************************************
+	qmfModel := tg.LoadModel("./magface_epoch_00025_pb", []string{"serve"}, nil)
 	if len(images) == 0 {
 		fmt.Println("return nil")
 	}
 	transformedFaces := generateEmbeddings(images)
-	frameEmbeddings := magface(transformedFaces)
+	transformedFacesTFTensor, err := denseToTFTensor(transformedFaces)
+
+	frameEmbeddings := qmfModel.Exec([]tf.Output{
+		qmfModel.Op("PartitionedCall", 0),
+	}, map[tf.Output]*tf.Tensor{
+		qmfModel.Op("serving_default_input.1", 0): transformedFacesTFTensor,
+	})
 
 	filePath := "./reg_embeddings.npy"
 	regEmbeddings, err := loadNpy(filePath)
@@ -888,7 +1036,8 @@ func main() {
 		fmt.Println("Error:", err)
 		return
 	}
-	qmfScores := similarityNoPair(frameEmbeddings, regEmbeddings)
+	frameEmbeddingsFloat64, err := tensorsToFloat64Slices(frameEmbeddings)
+	qmfScores := similarityNoPair(frameEmbeddingsFloat64, regEmbeddings)
 	regFiles, _ := getRegFiles("./_data/aligned_camera_data_anchor")
 	bSize := len(regFiles)
 	nB := int(math.Ceil(float64(len(qmfScores)) / float64(bSize)))
