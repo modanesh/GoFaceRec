@@ -23,13 +23,13 @@ func main() {
 	img := gocv.IMRead(filename, gocv.IMReadColor)
 	defer img.Close()
 
-	c_img := gocv.NewMat()
-	defer c_img.Close()
-	gocv.CvtColor(img, &c_img, gocv.ColorBGRToRGB)
+	cImg := gocv.NewMat()
+	defer cImg.Close()
+	gocv.CvtColor(img, &cImg, gocv.ColorBGRToRGB)
 
-	r_img := gocv.NewMat()
-	defer r_img.Close()
-	gocv.Resize(c_img, &r_img, image.Point{112, 112}, 0, 0, gocv.InterpolationLinear)
+	rImg := gocv.NewMat()
+	defer rImg.Close()
+	gocv.Resize(cImg, &rImg, image.Point{112, 112}, 0, 0, gocv.InterpolationLinear)
 
 	// A model exported with tf.saved_model.save()
 	// automatically comes with the "serve" tag because the SavedModel
@@ -59,129 +59,129 @@ func main() {
 	// Method name is: tensorflow/serving/predict
 
 	// QMagFace model
-	qmf_model := tg.LoadModel("./magface_epoch_00025_pb", []string{"serve"}, nil)
+	qmfModel := tg.LoadModel("./magface_epoch_00025_pb", []string{"serve"}, nil)
 
-	var qmf_fakeData [1][3][112][112]float32
+	var qmfFakeData [1][3][112][112]float32
 	for i := 0; i < 3; i++ {
 		for j := 0; j < 112; j++ {
 			for k := 0; k < 112; k++ {
-				qmf_fakeData[0][i][j][k] = 1.0
+				qmfFakeData[0][i][j][k] = 1.0
 			}
 		}
 	}
-	qmf_fakeInput, _ := tf.NewTensor(qmf_fakeData)
-	//qmf_fakeInput, _ := tf.NewTensor(r_img)
+	qmfFakeInput, _ := tf.NewTensor(qmfFakeData)
+	//qmfFakeInput, _ := tf.NewTensor(rImg)
 	fmt.Println("####################################################")
-	fmt.Println(qmf_fakeInput)
+	fmt.Println(qmfFakeInput)
 	root := tg.NewRoot()
 	x := tg.NewTensor(root, tg.Const(root, [2][1]int64{{10}, {100}}))
 	fmt.Println(x)
 	fmt.Println("####################################################")
 
-	qmf_results := qmf_model.Exec([]tf.Output{
-		qmf_model.Op("PartitionedCall", 0),
+	qmfResults := qmfModel.Exec([]tf.Output{
+		qmfModel.Op("PartitionedCall", 0),
 	}, map[tf.Output]*tf.Tensor{
-		qmf_model.Op("serving_default_input.1", 0): qmf_fakeInput,
+		qmfModel.Op("serving_default_input.1", 0): qmfFakeInput,
 	})
 
-	qmf_predictions := qmf_results[0]
+	qmfPredictions := qmfResults[0]
 	fmt.Println("####################### QMF output ######################")
-	fmt.Println(qmf_predictions.Value())
+	fmt.Println(qmfPredictions.Value())
 	fmt.Println("#########################################################")
 
 	// MTCNN model
-	pnet_model := tg.LoadModel("./mtcnn_pb/pnet_pb", []string{"serve"}, nil)
+	pnetModel := tg.LoadModel("./mtcnn_pb/pnet_pb", []string{"serve"}, nil)
 
-	//pnet_fakeInput, _ := tf.NewTensor([1][12][12][3]float32{})
-	var pnet_fakeData [1][12][12][3]float32
+	//pnetFakeInput, _ := tf.NewTensor([1][12][12][3]float32{})
+	var pnetFakeData [1][12][12][3]float32
 	for i := 0; i < 12; i++ {
 		for j := 0; j < 12; j++ {
 			for k := 0; k < 3; k++ {
-				pnet_fakeData[0][i][j][k] = 1.0
+				pnetFakeData[0][i][j][k] = 1.0
 			}
 		}
 	}
-	pnet_fakeInput, _ := tf.NewTensor(pnet_fakeData)
+	pnetFakeInput, _ := tf.NewTensor(pnetFakeData)
 
-	pnet_results := pnet_model.Exec([]tf.Output{
-		pnet_model.Op("PartitionedCall", 0),
+	pnetResults := pnetModel.Exec([]tf.Output{
+		pnetModel.Op("PartitionedCall", 0),
 	}, map[tf.Output]*tf.Tensor{
-		pnet_model.Op("serving_default_input_1", 0): pnet_fakeInput,
+		pnetModel.Op("serving_default_input_1", 0): pnetFakeInput,
 	})
 
-	pnet_predictions := pnet_results[0]
+	pnetPredictions := pnetResults[0]
 	fmt.Println("####################### PNet output ######################")
-	fmt.Println(pnet_predictions.Value())
+	fmt.Println(pnetPredictions.Value())
 	fmt.Println("#########################################################")
 
-	rnet_model := tg.LoadModel("./mtcnn_pb/rnet_pb", []string{"serve"}, nil)
+	rnetModel := tg.LoadModel("./mtcnn_pb/rnet_pb", []string{"serve"}, nil)
 
-	//rnet_fakeInput, _ := tf.NewTensor([1][24][24][3]float32{})
-	var rnet_fakeData [1][24][24][3]float32
+	//rnetFakeInput, _ := tf.NewTensor([1][24][24][3]float32{})
+	var rnetFakeData [1][24][24][3]float32
 	for i := 0; i < 24; i++ {
 		for j := 0; j < 24; j++ {
 			for k := 0; k < 3; k++ {
-				rnet_fakeData[0][i][j][k] = 1.0
+				rnetFakeData[0][i][j][k] = 1.0
 			}
 		}
 	}
-	rnet_fakeInput, _ := tf.NewTensor(rnet_fakeData)
+	rnetFakeInput, _ := tf.NewTensor(rnetFakeData)
 
-	rnet_results := rnet_model.Exec([]tf.Output{
-		rnet_model.Op("PartitionedCall", 0),
+	rnetResults := rnetModel.Exec([]tf.Output{
+		rnetModel.Op("PartitionedCall", 0),
 	}, map[tf.Output]*tf.Tensor{
-		rnet_model.Op("serving_default_input_2", 0): rnet_fakeInput,
+		rnetModel.Op("serving_default_input_2", 0): rnetFakeInput,
 	})
 
-	rnet_predictions := rnet_results[0]
+	rnetPredictions := rnetResults[0]
 	fmt.Println("####################### RNet output ######################")
-	fmt.Println(rnet_predictions.Value())
+	fmt.Println(rnetPredictions.Value())
 	fmt.Println("#########################################################")
 
-	onet_model := tg.LoadModel("./mtcnn_pb/onet_pb", []string{"serve"}, nil)
+	onetModel := tg.LoadModel("./mtcnn_pb/onet_pb", []string{"serve"}, nil)
 
-	//onet_fakeInput, _ := tf.NewTensor([1][48][48][3]float32{})
-	var onet_fakeData [1][48][48][3]float32
+	//onetFakeInput, _ := tf.NewTensor([1][48][48][3]float32{})
+	var onetFakeData [1][48][48][3]float32
 	for i := 0; i < 24; i++ {
 		for j := 0; j < 24; j++ {
 			for k := 0; k < 3; k++ {
-				onet_fakeData[0][i][j][k] = 1.0
+				onetFakeData[0][i][j][k] = 1.0
 			}
 		}
 	}
-	onet_fakeInput, _ := tf.NewTensor(onet_fakeData)
+	onetFakeInput, _ := tf.NewTensor(onetFakeData)
 
-	onet_results := onet_model.Exec([]tf.Output{
-		onet_model.Op("PartitionedCall", 0),
+	onetResults := onetModel.Exec([]tf.Output{
+		onetModel.Op("PartitionedCall", 0),
 	}, map[tf.Output]*tf.Tensor{
-		onet_model.Op("serving_default_input_3", 0): onet_fakeInput,
+		onetModel.Op("serving_default_input_3", 0): onetFakeInput,
 	})
 
-	onet_predictions := onet_results[0]
+	onetPredictions := onetResults[0]
 	fmt.Println("####################### ONet output ######################")
-	fmt.Println(onet_predictions.Value())
+	fmt.Println(onetPredictions.Value())
 	fmt.Println("#########################################################")
 
-	onet_results_1 := onet_model.Exec([]tf.Output{
-		onet_model.Op("PartitionedCall", 1),
+	onetResults1 := onetModel.Exec([]tf.Output{
+		onetModel.Op("PartitionedCall", 1),
 	}, map[tf.Output]*tf.Tensor{
-		onet_model.Op("serving_default_input_3", 0): onet_fakeInput,
+		onetModel.Op("serving_default_input_3", 0): onetFakeInput,
 	})
 
-	onet_predictions_1 := onet_results_1[0]
+	onetPredictions1 := onetResults1[0]
 	fmt.Println("####################### ONet output ######################")
-	fmt.Println(onet_predictions_1.Value())
+	fmt.Println(onetPredictions1.Value())
 	fmt.Println("#########################################################")
 
-	onet_results_2 := onet_model.Exec([]tf.Output{
-		onet_model.Op("PartitionedCall", 2),
+	onetResults2 := onetModel.Exec([]tf.Output{
+		onetModel.Op("PartitionedCall", 2),
 	}, map[tf.Output]*tf.Tensor{
-		onet_model.Op("serving_default_input_3", 0): onet_fakeInput,
+		onetModel.Op("serving_default_input_3", 0): onetFakeInput,
 	})
 
-	onet_predictions_2 := onet_results_2[0]
+	onetPredictions2 := onetResults2[0]
 	fmt.Println("####################### ONet output ######################")
-	fmt.Println(onet_predictions_2.Value())
+	fmt.Println(onetPredictions2.Value())
 	fmt.Println("#########################################################")
 
 }

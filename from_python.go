@@ -658,7 +658,7 @@ func denseToTFTensor(dense *tensor.Dense) (*tf.Tensor, error) {
 	}
 
 	// Create a *tf.Tensor from the reshaped data
-	tensor, err := tf.NewTensor(reshapedData)
+	reshapedDataTensor, err := tf.NewTensor(reshapedData)
 	if err != nil {
 		return nil, err
 	}
@@ -670,9 +670,9 @@ func denseToTFTensor(dense *tensor.Dense) (*tf.Tensor, error) {
 	}
 
 	// Reshape the *tf.Tensor to match the original shape
-	tensor.Reshape(int64Shape)
+	reshapedDataTensor.Reshape(int64Shape)
 
-	return tensor, nil
+	return reshapedDataTensor, nil
 }
 
 func similarityNoPair(fAnch [][]float64, fTest [][]float64) []float64 {

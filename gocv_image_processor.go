@@ -19,13 +19,13 @@ func main() {
 	img := gocv.IMRead(filename, gocv.IMReadColor)
 	defer img.Close()
 
-	c_img := gocv.NewMat()
-	defer c_img.Close()
-	gocv.CvtColor(img, &c_img, gocv.ColorBGRToRGB)
+	cImg := gocv.NewMat()
+	defer cImg.Close()
+	gocv.CvtColor(img, &cImg, gocv.ColorBGRToRGB)
 
-	r_img := gocv.NewMat()
-	defer r_img.Close()
-	gocv.Resize(c_img, &r_img, image.Point{112, 112}, 0, 0, gocv.InterpolationLinear)
+	rImg := gocv.NewMat()
+	defer rImg.Close()
+	gocv.Resize(cImg, &rImg, image.Point{112, 112}, 0, 0, gocv.InterpolationLinear)
 
-	gocv.IMWrite("resized.png", r_img)
+	gocv.IMWrite("resized.png", rImg)
 }
