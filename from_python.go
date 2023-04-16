@@ -833,7 +833,11 @@ func main() {
 	totalBoxes = validBoxes
 
 	// merge the detection from first stage
-	mergedBoxes := nms(totalBoxes, 0.7, "Union")
+	fiveTotalBoxes := make([][]float32, len(totalBoxes))
+	for i := range fiveTotalBoxes {
+		fiveTotalBoxes[i] = totalBoxes[i][:5] // Using slice notation a[i:j]
+	}
+	mergedBoxes := nms(fiveTotalBoxes, 0.7, "Union")
 	var pickedBoxes [][]float32
 	for _, idx := range mergedBoxes {
 		pickedBoxes = append(pickedBoxes, totalBoxes[idx])
@@ -847,7 +851,7 @@ func main() {
 		refinedBox := []float32{box[0] + box[5]*bbw, box[1] + box[6]*bbh, box[2] + box[7]*bbw, box[3] + box[8]*bbh, box[4]}
 		refinedBoxes = append(refinedBoxes, refinedBox)
 	}
-	totalBoxes = convertToSquare(totalBoxes)
+	totalBoxes = convertToSquare(refinedBoxes)
 	for i := range totalBoxes {
 		totalBoxes[i][0] = float32(math.Round(float64(totalBoxes[i][0])))
 		totalBoxes[i][1] = float32(math.Round(float64(totalBoxes[i][1])))
