@@ -20,7 +20,7 @@ import (
 
 // FloatImage represents a custom image type that satisfies the image.Image interface
 type FloatImage struct {
-	data [][]float64
+	data [][]float32
 }
 
 func (f FloatImage) ColorModel() color.Model {
@@ -37,20 +37,20 @@ func (f FloatImage) At(x, y int) color.Color {
 	return color.Gray16{Y: uint16(f.data[y][x])}
 }
 
-// ConvertFloatImage converts [][]float64 to FloatImage
-func ConvertFloatImage(data [][]float64) *FloatImage {
+// ConvertFloatImage converts [][]float32 to FloatImage
+func ConvertFloatImage(data [][]float32) *FloatImage {
 	return &FloatImage{data: data}
 }
 
-func matToFloat64Slice(mat gocv.Mat) [][]float64 {
+func matToFloat32Slice(mat gocv.Mat) [][]float32 {
 	rows, cols := mat.Rows(), mat.Cols()
-	slice := make([][]float64, rows)
+	slice := make([][]float32, rows)
 
 	for i := 0; i < rows; i++ {
-		rowSlice := make([]float64, cols)
+		rowSlice := make([]float32, cols)
 		for j := 0; j < cols; j++ {
 			val := mat.GetFloatAt(i, j)
-			rowSlice[j] = float64(val)
+			rowSlice[j] = float32(val)
 		}
 		slice[i] = rowSlice
 	}
@@ -76,7 +76,7 @@ func removeIndex(s []int, idx []int) []int {
 	return s
 }
 
-func nms(boxes [][]float64, overlapThreshold float64, mode string) []int {
+func nms(boxes [][]float32, overlapThreshold float64, mode string) []int {
 	if len(boxes) == 0 {
 		return []int{}
 	}
@@ -92,7 +92,7 @@ func nms(boxes [][]float64, overlapThreshold float64, mode string) []int {
 	pick := []int{}
 
 	// grab the coordinates of the bounding boxes
-	var x1, y1, x2, y2, score []float64
+	var x1, y1, x2, y2, score []float32
 	for _, box := range boxes {
 		x1 = append(x1, box[0])
 		y1 = append(y1, box[1])
@@ -101,7 +101,7 @@ func nms(boxes [][]float64, overlapThreshold float64, mode string) []int {
 		score = append(score, box[4])
 	}
 
-	area := make([]float64, len(boxes))
+	area := make([]float32, len(boxes))
 	for i := range boxes {
 		area[i] = (x2[i] - x1[i] + 1) * (y2[i] - y1[i] + 1)
 	}
@@ -125,10 +125,10 @@ func nms(boxes [][]float64, overlapThreshold float64, mode string) []int {
 		xx2 := make([]float64, last)
 		yy2 := make([]float64, last)
 		for j := 0; j < last; j++ {
-			xx1[j] = math.Max(x1[i], x1[idxs[j]])
-			yy1[j] = math.Max(y1[i], y1[idxs[j]])
-			xx2[j] = math.Min(x2[i], x2[idxs[j]])
-			yy2[j] = math.Min(y2[i], y2[idxs[j]])
+			xx1[j] = math.Max(float64(x1[i]), float64(x1[idxs[j]]))
+			yy1[j] = math.Max(float64(y1[i]), float64(y1[idxs[j]]))
+			xx2[j] = math.Min(float64(x2[i]), float64(x2[idxs[j]]))
+			yy2[j] = math.Min(float64(y2[i]), float64(y2[idxs[j]]))
 		}
 
 		// compute the width and height of the bounding box
@@ -143,9 +143,9 @@ func nms(boxes [][]float64, overlapThreshold float64, mode string) []int {
 		for j := 0; j < last; j++ {
 			inter[j] = w[j] * h[j]
 			if mode == "Min" {
-				overlap[j] = inter[j] / math.Min(area[i], area[idxs[j]])
+				overlap[j] = inter[j] / math.Min(float64(area[i]), float64(area[idxs[j]]))
 			} else {
-				overlap[j] = inter[j] / (area[i] + area[idxs[j]] - inter[j])
+				overlap[j] = inter[j] / (float64(area[i]) + float64(area[idxs[j]]) - inter[j])
 			}
 		}
 
@@ -167,7 +167,25 @@ func nms(boxes [][]float64, overlapThreshold float64, mode string) []int {
 	return pick
 }
 
-func generateBBox(heatmap [][]float64, reg [][][][]float64, scale float64, threshold float64) [][]float64 {
+func reshape4DArray(originalArray [][][][]float32, d1, d2, d3, d4 int) [][][][]float32 {
+	newShape := [4]int{d1, d2, d3, d4}
+	newArray := make([][][][]float32, newShape[0])
+	for i := range newArray {
+		newArray[i] = make([][][]float32, newShape[1])
+		for j := range newArray[i] {
+			newArray[i][j] = make([][]float32, newShape[2])
+			for k := range newArray[i][j] {
+				newArray[i][j][k] = make([]float32, newShape[3])
+				for l := range newArray[i][j][k] {
+					newArray[i][j][k][l] = originalArray[0][l][0][j]
+				}
+			}
+		}
+	}
+	return newArray
+}
+
+func generateBBox(heatmap [][]float32, reg [][][][]float32, scale float64, threshold float32) [][]float32 {
 	stride := 2
 	cellsize := 12
 
@@ -182,10 +200,9 @@ func generateBBox(heatmap [][]float64, reg [][][][]float64, scale float64, thres
 	}
 
 	if len(tIndex) == 0 {
-		return [][]float64{}
+		return [][]float32{}
 	}
-
-	dx1, dy1, dx2, dy2 := make([]float64, len(tIndex)), make([]float64, len(tIndex)), make([]float64, len(tIndex)), make([]float64, len(tIndex))
+	dx1, dy1, dx2, dy2 := make([]float32, len(tIndex)), make([]float32, len(tIndex)), make([]float32, len(tIndex)), make([]float32, len(tIndex))
 	for i, idx := range tIndex {
 		dx1[i] = reg[0][0][idx[0]][idx[1]]
 		dy1[i] = reg[0][1][idx[0]][idx[1]]
@@ -193,21 +210,21 @@ func generateBBox(heatmap [][]float64, reg [][][][]float64, scale float64, thres
 		dy2[i] = reg[0][3][idx[0]][idx[1]]
 	}
 
-	score := make([]float64, len(tIndex))
+	score := make([]float32, len(tIndex))
 	for i, idx := range tIndex {
 		score[i] = heatmap[idx[0]][idx[1]]
 	}
 
-	boundingBox := make([][]float64, len(tIndex))
+	boundingBox := make([][]float32, len(tIndex))
 	for i := range boundingBox {
-		boundingBox[i] = make([]float64, 9)
+		boundingBox[i] = make([]float32, 9)
 	}
 
 	for i, idx := range tIndex {
-		boundingBox[i][0] = math.Round((float64(stride*idx[1] + 1)) / scale)
-		boundingBox[i][1] = math.Round((float64(stride*idx[0] + 1)) / scale)
-		boundingBox[i][2] = math.Round((float64(stride*idx[1] + 1 + cellsize)) / scale)
-		boundingBox[i][3] = math.Round((float64(stride*idx[0] + 1 + cellsize)) / scale)
+		boundingBox[i][0] = float32(math.Round((float64(stride*idx[1] + 1)) / scale))
+		boundingBox[i][1] = float32(math.Round((float64(stride*idx[0] + 1)) / scale))
+		boundingBox[i][2] = float32(math.Round((float64(stride*idx[1] + 1 + cellsize)) / scale))
+		boundingBox[i][3] = float32(math.Round((float64(stride*idx[0] + 1 + cellsize)) / scale))
 		boundingBox[i][4] = score[i]
 		boundingBox[i][5] = dx1[i]
 		boundingBox[i][6] = dy1[i]
@@ -218,31 +235,23 @@ func generateBBox(heatmap [][]float64, reg [][][][]float64, scale float64, thres
 	return boundingBox
 }
 
-func flatten4DTo2D(data [][][][]float64) [][]float64 {
-	result := make([][]float64, 0)
-
-	for i := range data {
-		for j := range data[i] {
-			for k := range data[i][j] {
-				temp := make([]float64, 0)
-				for l := range data[i][j][k] {
-					temp = append(temp, data[i][j][k][l])
-				}
-				result = append(result, temp)
-			}
-		}
+func flatten4DTo2D(data [][][][]float32) [][]float32 {
+	var output [][]float32
+	for i := 0; i < len(data[0][1]); i++ {
+		row := make([]float32, len(data[0][1][i]))
+		copy(row, data[0][1][i])
+		output = append(output, row)
 	}
-
-	return result
+	return output
 }
 
-func flatten4DTo3D(data [][][][]float64) [][][]float64 {
-	result := make([][][]float64, len(data))
+func flatten4DTo3D(data [][][][]float32) [][][]float32 {
+	result := make([][][]float32, len(data))
 
 	for i := range data {
-		result[i] = make([][]float64, len(data[i]))
+		result[i] = make([][]float32, len(data[i]))
 		for j := range data[i] {
-			temp := make([]float64, 0)
+			temp := make([]float32, 0)
 			for k := range data[i][j] {
 				temp = append(temp, data[i][j][k]...)
 			}
@@ -253,7 +262,43 @@ func flatten4DTo3D(data [][][][]float64) [][][]float64 {
 	return result
 }
 
-func detectFirstStage(img gocv.Mat, net *tg.Model, scale float64, threshold float64) [][]float64 {
+func transpose(x [][][][]float32, order []int) [][][][]float32 {
+	if len(order) != 4 {
+		panic("order must have a length of 4")
+	}
+
+	dims := []int{len(x), len(x[0]), len(x[0][0]), len(x[0][0][0])}
+	newDims := []int{dims[order[0]], dims[order[1]], dims[order[2]], dims[order[3]]}
+
+	// Create output slice with transposed dimensions
+	out := make([][][][]float32, newDims[0])
+	for i := range out {
+		out[i] = make([][][]float32, newDims[1])
+		for j := range out[i] {
+			out[i][j] = make([][]float32, newDims[2])
+			for k := range out[i][j] {
+				out[i][j][k] = make([]float32, newDims[3])
+			}
+		}
+	}
+
+	// Transpose elements
+	for i := 0; i < dims[0]; i++ {
+		for j := 0; j < dims[1]; j++ {
+			for k := 0; k < dims[2]; k++ {
+				for l := 0; l < dims[3]; l++ {
+					xIndex := []int{i, j, k, l}
+					outIndex := []int{xIndex[order[0]], xIndex[order[1]], xIndex[order[2]], xIndex[order[3]]}
+					out[outIndex[0]][outIndex[1]][outIndex[2]][outIndex[3]] = x[xIndex[0]][xIndex[1]][xIndex[2]][xIndex[3]]
+				}
+			}
+		}
+	}
+
+	return out
+}
+
+func detectFirstStage(img gocv.Mat, net *tg.Model, scale float64, threshold float32) [][]float32 {
 	height, width := img.Size()[0], img.Size()[1]
 	ws := int(math.Ceil(float64(width) * scale))
 	hs := int(math.Ceil(float64(height) * scale))
@@ -261,23 +306,29 @@ func detectFirstStage(img gocv.Mat, net *tg.Model, scale float64, threshold floa
 	imData := gocv.NewMat()
 	defer imData.Close()
 	gocv.Resize(img, &imData, image.Point{X: ws, Y: hs}, 0, 0, gocv.InterpolationLinear)
+	//gocv.Resize(img, &imData, image.Point{X: 12, Y: 12}, 0, 0, gocv.InterpolationLinear)
 
 	inputBuf := adjustInput(imData)
 	inputBufTensor, _ := tf.NewTensor(inputBuf)
+	newShape := []int64{1, int64(ws), int64(hs), 3}
+	inputBufTensor.Reshape(newShape)
 	netOutput := net.Exec([]tf.Output{
 		net.Op("PartitionedCall", 0),
 		net.Op("PartitionedCall", 1),
 	}, map[tf.Output]*tf.Tensor{
 		net.Op("serving_default_input_1", 0): inputBufTensor,
 	})
-	reg, ok := netOutput[0].Value().([][][][]float64)
+	reg, ok := netOutput[0].Value().([][][][]float32)
 	if !ok {
 		fmt.Println("Failed to convert reg to [][][][]float64")
 	}
-	heatmap, ok := netOutput[1].Value().([][][][]float64)
+	heatmap, ok := netOutput[1].Value().([][][][]float32)
 	if !ok {
 		fmt.Println("Failed to convert heatmap to [][]float64")
 	}
+	order := []int{0, 3, 2, 1}
+	reg = transpose(reg, order)
+	heatmap = transpose(heatmap, order)
 	boxes := generateBBox(flatten4DTo2D(heatmap), reg, scale, threshold)
 
 	if len(boxes) == 0 {
@@ -286,21 +337,21 @@ func detectFirstStage(img gocv.Mat, net *tg.Model, scale float64, threshold floa
 
 	// nms
 	pick := nms(boxes, 0.5, "Union")
-	var pickedBoxes [][]float64
+	var pickedBoxes [][]float32
 	for _, index := range pick {
 		pickedBoxes = append(pickedBoxes, boxes[index])
 	}
 	return pickedBoxes
 }
 
-func convertToSquare(bbox [][]float64) [][]float64 {
-	squareBbox := make([][]float64, len(bbox))
+func convertToSquare(bbox [][]float32) [][]float32 {
+	squareBbox := make([][]float32, len(bbox))
 	for i := 0; i < len(bbox); i++ {
-		squareBbox[i] = make([]float64, len(bbox[i]))
+		squareBbox[i] = make([]float32, len(bbox[i]))
 		copy(squareBbox[i], bbox[i])
 		h := bbox[i][3] - bbox[i][1] + 1
 		w := bbox[i][2] - bbox[i][0] + 1
-		maxSide := math.Max(h, w)
+		maxSide := float32(math.Max(float64(h), float64(w)))
 		squareBbox[i][0] = bbox[i][0] + w*0.5 - maxSide*0.5
 		squareBbox[i][1] = bbox[i][1] + h*0.5 - maxSide*0.5
 		squareBbox[i][2] = squareBbox[i][0] + maxSide - 1
@@ -309,31 +360,31 @@ func convertToSquare(bbox [][]float64) [][]float64 {
 	return squareBbox
 }
 
-func pad(bboxes [][]float64, w float64, h float64) ([]float64, []float64, []float64, []float64, []float64, []float64, []float64, []float64, []float64, []float64) {
+func pad(bboxes [][]float32, w float32, h float32) ([]float32, []float32, []float32, []float32, []float32, []float32, []float32, []float32, []float32, []float32) {
 	numBox := len(bboxes)
-	tmpw := make([]float64, numBox)
-	tmph := make([]float64, numBox)
-	for i, box := range bboxes {
-		tmpw[i] = box[2] - box[0] + 1
-		tmph[i] = box[3] - box[1] + 1
-	}
-
-	dx := make([]float64, numBox)
-	dy := make([]float64, numBox)
-	edx := make([]float64, numBox)
-	edy := make([]float64, numBox)
-
-	x := make([]float64, numBox)
-	y := make([]float64, numBox)
-	ex := make([]float64, numBox)
-	ey := make([]float64, numBox)
-
-	copy(x, bboxes[0])
-	copy(y, bboxes[1])
-	copy(ex, bboxes[2])
-	copy(ey, bboxes[3])
+	tmpw := make([]float32, numBox)
+	tmph := make([]float32, numBox)
 
 	for i := range bboxes {
+		tmpw[i] = bboxes[i][2] - bboxes[i][0] + 1
+		tmph[i] = bboxes[i][3] - bboxes[i][1] + 1
+	}
+
+	dx := make([]float32, numBox)
+	dy := make([]float32, numBox)
+	edx := make([]float32, numBox)
+	edy := make([]float32, numBox)
+
+	x := make([]float32, numBox)
+	y := make([]float32, numBox)
+	ex := make([]float32, numBox)
+	ey := make([]float32, numBox)
+
+	for i := range bboxes {
+		dx[i], dy[i] = 0, 0
+		edx[i], edy[i] = tmpw[i]-1, tmph[i]-1
+		x[i], y[i], ex[i], ey[i] = bboxes[i][0], bboxes[i][1], bboxes[i][2], bboxes[i][3]
+
 		if ex[i] > w-1 {
 			edx[i] = tmpw[i] + w - 2 - ex[i]
 			ex[i] = w - 1
@@ -352,35 +403,28 @@ func pad(bboxes [][]float64, w float64, h float64) ([]float64, []float64, []floa
 		}
 	}
 
-	tmpw64 := make([]float64, numBox)
-	tmph64 := make([]float64, numBox)
-	for i := range tmpw {
-		tmpw64[i] = tmpw[i]
-		tmph64[i] = tmph[i]
-	}
-
-	return dy, edy, dx, edx, y, ey, x, ex, tmpw64, tmph64
+	return dy, edy, dx, edx, y, ey, x, ex, tmpw, tmph
 }
 
-func adjustInput(inData gocv.Mat) [][]float64 {
+func adjustInput(inData gocv.Mat) [][]float32 {
 	// adjust the input from (h, w, c) to (1, c, h, w) for network input
 	channels := inData.Channels()
 	rows, cols := inData.Rows(), inData.Cols()
 
 	// transpose (h, w, c) to (c, h, w)
-	outData := make([][]float64, channels)
+	outData := make([][]float32, channels)
 	for c := 0; c < channels; c++ {
-		outData[c] = make([]float64, rows*cols)
+		outData[c] = make([]float32, rows*cols)
 		for i := 0; i < rows; i++ {
 			for j := 0; j < cols; j++ {
 				v := inData.GetVecfAt(i, j)[c]
-				outData[c][i*cols+j] = float64(v)
+				outData[c][i*cols+j] = float32(v)
 			}
 		}
 	}
 
 	// expand dims to (1, c, h, w)
-	outData = [][]float64{flatten2DTo1D(outData)}
+	outData = [][]float32{flatten2DTo1D(outData)}
 
 	// normalize
 	for c := 0; c < channels; c++ {
@@ -392,8 +436,8 @@ func adjustInput(inData gocv.Mat) [][]float64 {
 	return outData
 }
 
-func flatten2DTo1D(arr [][]float64) []float64 {
-	var res []float64
+func flatten2DTo1D(arr [][]float32) []float32 {
+	var res []float32
 	for _, a := range arr {
 		res = append(res, a...)
 	}
@@ -439,25 +483,25 @@ func tensorsToFloat64Slices(tensors []*tf.Tensor) ([][]float64, error) {
 	return result, nil
 }
 
-func CalibrateBox(bbox [][]float64, reg [][]float64) [][]float64 {
+func CalibrateBox(bbox [][]float32, reg [][]float32) [][]float32 {
 	n := len(bbox)
-	w := make([]float64, n)
-	h := make([]float64, n)
+	w := make([]float32, n)
+	h := make([]float32, n)
 	for i := 0; i < n; i++ {
 		w[i] = bbox[i][2] - bbox[i][0] + 1
 		h[i] = bbox[i][3] - bbox[i][1] + 1
 	}
-	regM := make([][]float64, n)
+	regM := make([][]float32, n)
 	for i := range regM {
-		regM[i] = make([]float64, 4)
+		regM[i] = make([]float32, 4)
 		regM[i][0] = w[i]
 		regM[i][1] = h[i]
 		regM[i][2] = w[i]
 		regM[i][3] = h[i]
 	}
-	aug := make([][]float64, n)
+	aug := make([][]float32, n)
 	for i := range aug {
-		aug[i] = make([]float64, 4)
+		aug[i] = make([]float32, 4)
 		aug[i][0] = regM[i][0] * reg[i][0]
 		aug[i][1] = regM[i][1] * reg[i][1]
 		aug[i][2] = regM[i][2] * reg[i][2]
@@ -472,21 +516,21 @@ func CalibrateBox(bbox [][]float64, reg [][]float64) [][]float64 {
 	return bbox
 }
 
-func float64SliceToPoint2fSlice(float64Slice []float64) []gocv.Point2f {
-	if len(float64Slice)%2 != 0 {
-		panic("float64Slice length must be even.")
+func float32SliceToPoint2fSlice(float32Slice []float32) []gocv.Point2f {
+	if len(float32Slice)%2 != 0 {
+		panic("float32Slice length must be even.")
 	}
 
-	point2fSlice := make([]gocv.Point2f, len(float64Slice)/2)
+	point2fSlice := make([]gocv.Point2f, len(float32Slice)/2)
 
-	for i := 0; i < len(float64Slice); i += 2 {
-		point2fSlice[i/2] = gocv.Point2f{X: float32(float64Slice[i]), Y: float32(float64Slice[i+1])}
+	for i := 0; i < len(float32Slice); i += 2 {
+		point2fSlice[i/2] = gocv.Point2f{X: float32Slice[i], Y: float32Slice[i+1]}
 	}
 
 	return point2fSlice
 }
 
-func preprocess(img gocv.Mat, bbox []float64, landmark []gocv.Point2f) gocv.Mat {
+func preprocess(img gocv.Mat, bbox []float32, landmark []gocv.Point2f) gocv.Mat {
 	var M gocv.Mat
 	imageSize := []int{112, 112}
 
@@ -512,22 +556,22 @@ func preprocess(img gocv.Mat, bbox []float64, landmark []gocv.Point2f) gocv.Mat 
 	}
 
 	if M.Empty() {
-		var det []float64
+		var det []float32
 		if bbox == nil {
-			det = make([]float64, 4)
-			det[0] = float64(img.Cols()) * 0.0625
-			det[1] = float64(img.Rows()) * 0.0625
-			det[2] = float64(img.Cols()) - det[0]
-			det[3] = float64(img.Rows()) - det[1]
+			det = make([]float32, 4)
+			det[0] = float32(img.Cols()) * 0.0625
+			det[1] = float32(img.Rows()) * 0.0625
+			det[2] = float32(img.Cols()) - det[0]
+			det[3] = float32(img.Rows()) - det[1]
 		} else {
 			det = bbox
 		}
 		margin := 44
 		bb := make([]int, 4)
-		bb[0] = int(math.Max(det[0]-float64(margin/2), 0))
-		bb[1] = int(math.Max(det[1]-float64(margin/2), 0))
-		bb[2] = int(math.Min(det[2]+float64(margin/2), float64(img.Cols())))
-		bb[3] = int(math.Min(det[3]+float64(margin/2), float64(img.Rows())))
+		bb[0] = int(math.Max(float64(det[0])-float64(margin/2), 0))
+		bb[1] = int(math.Max(float64(det[1])-float64(margin/2), 0))
+		bb[2] = int(math.Min(float64(det[2])+float64(margin/2), float64(img.Cols())))
+		bb[3] = int(math.Min(float64(det[3])+float64(margin/2), float64(img.Rows())))
 
 		ret := img.Region(image.Rect(bb[0], bb[1], bb[2], bb[3]))
 		if len(imageSize) > 0 {
@@ -541,33 +585,33 @@ func preprocess(img gocv.Mat, bbox []float64, landmark []gocv.Point2f) gocv.Mat 
 	}
 }
 
-func ConvertToFloats(img image.Image) [][]float64 {
+func ConvertToFloats(img image.Image) [][]float32 {
 	bounds := img.Bounds()
 	height := bounds.Dy()
 	width := bounds.Dx()
 
-	data := make([][]float64, height)
+	data := make([][]float32, height)
 	for y := 0; y < height; y++ {
-		data[y] = make([]float64, width)
+		data[y] = make([]float32, width)
 		for x := 0; x < width; x++ {
 			grayColor := color.GrayModel.Convert(img.At(x, y)).(color.Gray)
-			data[y][x] = float64(grayColor.Y)
+			data[y][x] = float32(grayColor.Y)
 		}
 	}
 
 	return data
 }
 
-func generateEmbeddings(imgs [][][]float64) *tensor.Dense {
-	mean := []float64{0.0, 0.0, 0.0}
-	std := []float64{1.0, 1.0, 1.0}
-	trans := tensor.New(tensor.WithShape(3), tensor.WithBacking([]float64{
+func generateEmbeddings(imgs [][][]float32) *tensor.Dense {
+	mean := []float32{0.0, 0.0, 0.0}
+	std := []float32{1.0, 1.0, 1.0}
+	trans := tensor.New(tensor.WithShape(3), tensor.WithBacking([]float32{
 		1.0 / std[0], 0.0, 0.0,
 		0.0, 1.0 / std[1], 0.0,
 		0.0, 0.0, 1.0 / std[2],
 	}))
 
-	permutedImgs := tensor.New(tensor.WithShape(len(imgs), 3, len(imgs[0]), len(imgs[0][0])), tensor.WithBacking(make([]float64, len(imgs)*3*len(imgs[0])*len(imgs[0][0]))))
+	permutedImgs := tensor.New(tensor.WithShape(len(imgs), 3, len(imgs[0]), len(imgs[0][0])), tensor.WithBacking(make([]float32, len(imgs)*3*len(imgs[0])*len(imgs[0][0]))))
 	for i, img := range imgs {
 		imageImage := ConvertFloatImage(img)
 		listImg := resize.Resize(224, 224, imageImage, resize.Lanczos3)
@@ -731,6 +775,15 @@ func getRegFiles(regDataPath string) ([]string, error) {
 	return regFiles, nil
 }
 
+func getShape(arr [][]float32) (int, int) {
+	numRows := len(arr)
+	numCols := 0
+	if numRows > 0 {
+		numCols = len(arr[0])
+	}
+	return numRows, numCols
+}
+
 func main() {
 	filename := "./obama.jpg"
 
@@ -764,14 +817,14 @@ func main() {
 	////////////////////////////////////////////
 	pnetModel := tg.LoadModel("./mtcnn_pb/pnet_pb", []string{"serve"}, nil)
 	slicedIndex := sliceIndex(len(scales))
-	var totalBoxes [][]float64
+	var totalBoxes [][]float32
 	for _, batch := range slicedIndex {
 		localBoxes := detectFirstStage(cImg, pnetModel, scales[batch], 0.6)
 		totalBoxes = append(totalBoxes, localBoxes...)
 	}
 
 	// remove the Nones
-	var validBoxes [][]float64
+	var validBoxes [][]float32
 	for _, box := range totalBoxes {
 		if box != nil {
 			validBoxes = append(validBoxes, box)
@@ -781,25 +834,25 @@ func main() {
 
 	// merge the detection from first stage
 	mergedBoxes := nms(totalBoxes, 0.7, "Union")
-	var pickedBoxes [][]float64
+	var pickedBoxes [][]float32
 	for _, idx := range mergedBoxes {
 		pickedBoxes = append(pickedBoxes, totalBoxes[idx])
 	}
 
 	// refine the boxes
-	var refinedBoxes [][]float64
+	var refinedBoxes [][]float32
 	for _, box := range totalBoxes {
 		bbw := box[2] - box[0] + 1
 		bbh := box[3] - box[1] + 1
-		refinedBox := []float64{box[0] + box[5]*bbw, box[1] + box[6]*bbh, box[2] + box[7]*bbw, box[3] + box[8]*bbh, box[4]}
+		refinedBox := []float32{box[0] + box[5]*bbw, box[1] + box[6]*bbh, box[2] + box[7]*bbw, box[3] + box[8]*bbh, box[4]}
 		refinedBoxes = append(refinedBoxes, refinedBox)
 	}
 	totalBoxes = convertToSquare(totalBoxes)
 	for i := range totalBoxes {
-		totalBoxes[i][0] = math.Round(totalBoxes[i][0])
-		totalBoxes[i][1] = math.Round(totalBoxes[i][1])
-		totalBoxes[i][2] = math.Round(totalBoxes[i][2])
-		totalBoxes[i][3] = math.Round(totalBoxes[i][3])
+		totalBoxes[i][0] = float32(math.Round(float64(totalBoxes[i][0])))
+		totalBoxes[i][1] = float32(math.Round(float64(totalBoxes[i][1])))
+		totalBoxes[i][2] = float32(math.Round(float64(totalBoxes[i][2])))
+		totalBoxes[i][3] = float32(math.Round(float64(totalBoxes[i][3])))
 	}
 
 	////////////////////////////////////////////
@@ -809,15 +862,15 @@ func main() {
 	numBox := len(totalBoxes)
 
 	// pad the bbox
-	dy, edy, dx, edx, y, ey, x, ex, tmpw, tmph := pad(totalBoxes, float64(width), float64(height))
+	dy, edy, dx, edx, y, ey, x, ex, tmpw, tmph := pad(totalBoxes, float32(width), float32(height))
 	// (3, 24, 24) is the input shape for RNet
-	inputBuf := make([][][][]float64, numBox)
+	inputBuf := make([][][][]float32, numBox)
 	for i := 0; i < numBox; i++ {
-		inputBuf[i] = make([][][]float64, 3)
+		inputBuf[i] = make([][][]float32, 3)
 		for j := 0; j < 3; j++ {
-			inputBuf[i][j] = make([][]float64, 24)
+			inputBuf[i][j] = make([][]float32, 24)
 			for k := 0; k < 24; k++ {
-				inputBuf[i][j][k] = make([]float64, 24)
+				inputBuf[i][j][k] = make([]float32, 24)
 			}
 		}
 	}
@@ -844,7 +897,7 @@ func main() {
 	}, map[tf.Output]*tf.Tensor{
 		rnetModel.Op("serving_default_input_2", 0): inputBufTensor,
 	})
-	rNetOutput, ok := output[0].Value().([][][][]float64)
+	rNetOutput, ok := output[0].Value().([][][][]float32)
 	if !ok {
 		fmt.Println("Failed to convert rNetOutput to [][][][]float64")
 	}
@@ -857,7 +910,7 @@ func main() {
 			passed = append(passed, i)
 		}
 	}
-	var secondTotalBoxes [][]float64
+	var secondTotalBoxes [][]float32
 	for _, i := range passed {
 		secondTotalBoxes = append(secondTotalBoxes, totalBoxes[i])
 	}
@@ -866,17 +919,17 @@ func main() {
 		fmt.Println("return nil")
 	}
 
-	var scores [][]float64
-	var reg [][]float64
+	var scores [][]float32
+	var reg [][]float32
 	for _, i := range passed {
-		scores = append(scores, []float64{flattenOutput[1][i][1]})
+		scores = append(scores, []float32{flattenOutput[1][i][1]})
 		reg = append(reg, flattenOutput[0][i])
 	}
 
 	// nms
 	pick := nms(scores, 0.7, "Union")
-	var newPickedBoxes [][]float64
-	var pickedReg [][]float64
+	var newPickedBoxes [][]float32
+	var pickedReg [][]float32
 	for _, i := range pick {
 		newPickedBoxes = append(newPickedBoxes, secondTotalBoxes[i])
 		pickedReg = append(pickedReg, reg[i])
@@ -885,7 +938,7 @@ func main() {
 	squaredBoxes := convertToSquare(calibratedBoxes)
 	for i := range squaredBoxes {
 		for j := 0; j < 4; j++ {
-			squaredBoxes[i][j] = math.Round(squaredBoxes[i][j])
+			squaredBoxes[i][j] = float32(math.Round(float64(squaredBoxes[i][j])))
 		}
 	}
 
@@ -895,15 +948,15 @@ func main() {
 	onetModel := tg.LoadModel("./mtcnn_pb/onet_pb", []string{"serve"}, nil)
 	numBox = len(squaredBoxes)
 	// pad the bbox
-	dy, edy, dx, edx, y, ey, x, ex, tmpw, tmph = pad(squaredBoxes, float64(width), float64(height))
+	dy, edy, dx, edx, y, ey, x, ex, tmpw, tmph = pad(squaredBoxes, float32(width), float32(height))
 	// (3, 48, 48) is the input shape for ONet
-	inputBuf = make([][][][]float64, numBox)
+	inputBuf = make([][][][]float32, numBox)
 	for i := 0; i < numBox; i++ {
-		inputBuf[i] = make([][][]float64, 3)
+		inputBuf[i] = make([][][]float32, 3)
 		for j := 0; j < 3; j++ {
-			inputBuf[i][j] = make([][]float64, 48)
+			inputBuf[i][j] = make([][]float32, 48)
 			for k := 0; k < 24; k++ {
-				inputBuf[i][j][k] = make([]float64, 48)
+				inputBuf[i][j][k] = make([]float32, 48)
 			}
 		}
 	}
@@ -930,7 +983,7 @@ func main() {
 	}, map[tf.Output]*tf.Tensor{
 		onetModel.Op("serving_default_input_3", 0): inputBufTensorOnet,
 	})
-	oNetOutput, ok := onetOutput[0].Value().([][][][]float64)
+	oNetOutput, ok := onetOutput[0].Value().([][][][]float32)
 	if !ok {
 		fmt.Println("Failed to convert oNetOutput to [][][][]float64")
 	}
@@ -943,7 +996,7 @@ func main() {
 			thirdPassed = append(thirdPassed, i)
 		}
 	}
-	var thirdFilteredBoxes [][]float64
+	var thirdFilteredBoxes [][]float32
 	for _, i := range thirdPassed {
 		thirdFilteredBoxes = append(thirdFilteredBoxes, squaredBoxes[i])
 	}
@@ -952,16 +1005,16 @@ func main() {
 		fmt.Println("return nil")
 	}
 
-	var thirdScores [][]float64
-	var thirdReg [][]float64
-	var points [][]float64
+	var thirdScores [][]float32
+	var thirdReg [][]float32
+	var points [][]float32
 	for _, i := range thirdPassed {
-		thirdScores = append(thirdScores, []float64{flattenOutput[2][i][1]})
+		thirdScores = append(thirdScores, []float32{flattenOutput[2][i][1]})
 		thirdReg = append(thirdReg, flattenOutput[1][i])
 		points = append(points, flattenOutput[0][i])
 	}
-	bbw := make([]float64, len(thirdScores))
-	bbh := make([]float64, len(thirdScores))
+	bbw := make([]float32, len(thirdScores))
+	bbh := make([]float32, len(thirdScores))
 	for i, box := range thirdScores {
 		bbw[i] = box[2] - box[0] + 1
 		bbh[i] = box[3] - box[1] + 1
@@ -979,8 +1032,8 @@ func main() {
 	calibratedBoxes = CalibrateBox(thirdScores, thirdReg)
 	pick = nms(calibratedBoxes, 0.7, "Min")
 
-	var thirdPickedBoxes [][]float64
-	var pickedPoints [][]float64
+	var thirdPickedBoxes [][]float32
+	var pickedPoints [][]float32
 	for _, i := range pick {
 		thirdPickedBoxes = append(thirdPickedBoxes, calibratedBoxes[i])
 		pickedPoints = append(pickedPoints, points[i])
@@ -994,23 +1047,23 @@ func main() {
 		fmt.Println("return nil")
 	}
 
-	var images [][][]float64
+	var images [][][]float32
 	for i := range points {
 		p := points[i]
-		var p2d [2][5]float64
+		var p2d [2][5]float32
 		for j := 0; j < 5; j++ {
 			p2d[0][j] = p[j]
 			p2d[1][j] = p[j+5]
 		}
-		p = make([]float64, 10)
+		p = make([]float32, 10)
 		for j := 0; j < 5; j++ {
 			p[j] = p2d[0][j]
 			p[j+5] = p2d[1][j]
 		}
 		b := thirdPickedBoxes[i]
-		pPoint2f := float64SliceToPoint2fSlice(p)
+		pPoint2f := float32SliceToPoint2fSlice(p)
 		processedImg := preprocess(img, b, pPoint2f)
-		sliceImg := matToFloat64Slice(processedImg)
+		sliceImg := matToFloat32Slice(processedImg)
 		images = append(images, sliceImg)
 	}
 
