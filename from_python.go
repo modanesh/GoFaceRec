@@ -188,33 +188,36 @@ func reshape4DArray(originalArray [][][][]float32, d1, d2, d3, d4 int) [][][][]f
 func generateBBox(heatmap [][]float32, reg [][][][]float32, scale float64, threshold float32) [][]float32 {
 	stride := 2
 	cellsize := 12
-
-	tIndex := make([][]int, 0)
-
-	for i, row := range heatmap {
-		for j, value := range row {
-			if value > threshold {
-				tIndex = append(tIndex, []int{i, j})
+	rowIndices := []int{}
+	colIndices := []int{}
+	for i := 0; i < len(heatmap); i++ {
+		for j := 0; j < len(heatmap[i]); j++ {
+			if heatmap[i][j] > threshold {
+				rowIndices = append(rowIndices, i)
+				colIndices = append(colIndices, j)
 			}
 		}
 	}
-
+	tIndex := [][]int{rowIndices, colIndices}
 	if len(tIndex) == 0 {
 		return [][]float32{}
 	}
 	dx1, dy1, dx2, dy2 := make([]float32, len(tIndex)), make([]float32, len(tIndex)), make([]float32, len(tIndex)), make([]float32, len(tIndex))
+	fmt.Println("-------------------------")
+	fmt.Println(getShape4d(reg))
+	fmt.Println(tIndex)
 	for i, idx := range tIndex {
+		fmt.Println("++++++++0", i)
+		fmt.Println("++++++++1", idx)
 		dx1[i] = reg[0][0][idx[0]][idx[1]]
 		dy1[i] = reg[0][1][idx[0]][idx[1]]
 		dx2[i] = reg[0][2][idx[0]][idx[1]]
 		dy2[i] = reg[0][3][idx[0]][idx[1]]
 	}
-
 	score := make([]float32, len(tIndex))
 	for i, idx := range tIndex {
 		score[i] = heatmap[idx[0]][idx[1]]
 	}
-
 	boundingBox := make([][]float32, len(tIndex))
 	for i := range boundingBox {
 		boundingBox[i] = make([]float32, 9)
@@ -306,18 +309,19 @@ func detectFirstStage(img gocv.Mat, net *tg.Model, scale float64, threshold floa
 	imData := gocv.NewMat()
 	defer imData.Close()
 	gocv.Resize(img, &imData, image.Point{X: ws, Y: hs}, 0, 0, gocv.InterpolationLinear)
-	//gocv.Resize(img, &imData, image.Point{X: 12, Y: 12}, 0, 0, gocv.InterpolationLinear)
 
 	inputBuf := adjustInput(imData)
 	inputBufTensor, _ := tf.NewTensor(inputBuf)
 	newShape := []int64{1, int64(ws), int64(hs), 3}
 	inputBufTensor.Reshape(newShape)
+
 	netOutput := net.Exec([]tf.Output{
 		net.Op("PartitionedCall", 0),
 		net.Op("PartitionedCall", 1),
 	}, map[tf.Output]*tf.Tensor{
 		net.Op("serving_default_input_1", 0): inputBufTensor,
 	})
+
 	reg, ok := netOutput[0].Value().([][][][]float32)
 	if !ok {
 		fmt.Println("Failed to convert reg to [][][][]float64")
@@ -329,8 +333,9 @@ func detectFirstStage(img gocv.Mat, net *tg.Model, scale float64, threshold floa
 	order := []int{0, 3, 2, 1}
 	reg = transpose(reg, order)
 	heatmap = transpose(heatmap, order)
-	boxes := generateBBox(flatten4DTo2D(heatmap), reg, scale, threshold)
 
+	//TODO: checked until this line
+	boxes := generateBBox(flatten4DTo2D(heatmap), reg, scale, threshold)
 	if len(boxes) == 0 {
 		return nil
 	}
@@ -406,33 +411,29 @@ func pad(bboxes [][]float32, w float32, h float32) ([]float32, []float32, []floa
 	return dy, edy, dx, edx, y, ey, x, ex, tmpw, tmph
 }
 
-func adjustInput(inData gocv.Mat) [][]float32 {
-	// adjust the input from (h, w, c) to (1, c, h, w) for network input
+func adjustInput(inData gocv.Mat) [][][][]float32 {
 	channels := inData.Channels()
 	rows, cols := inData.Rows(), inData.Cols()
 
-	// transpose (h, w, c) to (c, h, w)
-	outData := make([][]float32, channels)
-	for c := 0; c < channels; c++ {
-		outData[c] = make([]float32, rows*cols)
-		for i := 0; i < rows; i++ {
-			for j := 0; j < cols; j++ {
-				v := inData.GetVecfAt(i, j)[c]
-				outData[c][i*cols+j] = float32(v)
+	outData := make([][][][]float32, 1)
+	outData[0] = make([][][]float32, channels)
+
+	for i := 0; i < channels; i++ {
+		outData[0][i] = make([][]float32, rows)
+		for j := 0; j < rows; j++ {
+			outData[0][i][j] = make([]float32, cols)
+		}
+	}
+	channelOrder := []int{2, 1, 0} // Change the channel order to match the Python output
+	for i := 0; i < rows; i++ {
+		for j := 0; j < cols; j++ {
+			vec := inData.GetVecbAt(i, j)
+			for k := 0; k < channels; k++ {
+				val := float32(vec[channelOrder[k]])
+				outData[0][k][i][j] = (val - 127.5) * 0.0078125
 			}
 		}
 	}
-
-	// expand dims to (1, c, h, w)
-	outData = [][]float32{flatten2DTo1D(outData)}
-
-	// normalize
-	for c := 0; c < channels; c++ {
-		for i := 0; i < rows*cols; i++ {
-			outData[0][c*rows*cols+i] = (outData[0][c*rows*cols+i] - 127.5) * 0.0078125
-		}
-	}
-
 	return outData
 }
 
@@ -784,6 +785,14 @@ func getShape(arr [][]float32) (int, int) {
 	return numRows, numCols
 }
 
+func getShape4d(arr [][][][]float32) (int, int, int, int) {
+	numRows := len(arr)
+	numCols := len(arr[0])
+	numCols2 := len(arr[0][0])
+	numCols3 := len(arr[0][0][0])
+	return numRows, numCols, numCols2, numCols3
+}
+
 func main() {
 	filename := "./obama.jpg"
 
@@ -879,20 +888,39 @@ func main() {
 		}
 	}
 
+	//for i := 0; i < numBox; i++ {
+	//	tmp := gocv.NewMatWithSize(int(tmph[i]), int(tmpw[i]), gocv.MatTypeCV8UC3)
+	//	defer tmp.Close()
+	//	scalar := gocv.NewScalar(0, 0, 0, 0)
+	//	tmp.SetTo(scalar)
+	//	roi := img.Region(image.Rect(int(dx[i]), int(dy[i]), int(edx[i]+1), int(edy[i]+1)))
+	//	defer roi.Close()
+	//	region := tmp.Region(image.Rect(int(x[i]), int(y[i]), int(ex[i]+1), int(ey[i]+1)))
+	//	defer region.Close()
+	//	roi.CopyTo(&region)
+	//	resizedTmp := gocv.NewMat()
+	//	defer resizedTmp.Close()
+	//	gocv.Resize(tmp, &resizedTmp, image.Point{X: 24, Y: 24}, 0, 0, gocv.InterpolationDefault)
+	//	inputBuf[0][i] = adjustInput(resizedTmp)
+	//}
+
 	for i := 0; i < numBox; i++ {
 		tmp := gocv.NewMatWithSize(int(tmph[i]), int(tmpw[i]), gocv.MatTypeCV8UC3)
-		//defer tmp.Close()
-		scalar := gocv.NewScalar(0, 0, 0, 0)
-		tmp.SetTo(scalar)
-		roi := img.Region(image.Rect(int(dx[i]), int(dy[i]), int(edx[i]+1), int(edy[i]+1)))
-		//defer roi.Close()
-		region := tmp.Region(image.Rect(int(x[i]), int(y[i]), int(ex[i]+1), int(ey[i]+1)))
-		//defer region.Close()
-		roi.CopyTo(&region)
-		resizedTmp := gocv.NewMat()
-		//defer resizedTmp.Close()
-		gocv.Resize(tmp, &resizedTmp, image.Point{X: 24, Y: 24}, 0, 0, gocv.InterpolationDefault)
-		inputBuf[0][i] = adjustInput(resizedTmp)
+		roi := cImg.Region(image.Rect(int(y[i]), int(x[i]), int(ey[i]+1), int(ex[i]+1)))
+		tmpRoi := tmp.Region(image.Rect(int(dy[i]), int(dx[i]), int(edy[i]+1), int(edx[i]+1)))
+		if !roi.Empty() && !tmpRoi.Empty() {
+			roi.CopyTo(&tmpRoi)
+		}
+		roi.Close()
+		tmpRoi.Close()
+		if !tmp.Empty() {
+			resizedTmp := gocv.NewMat()
+			gocv.Resize(tmp, &resizedTmp, image.Point{24, 24}, 0, 0, gocv.InterpolationLinear)
+			//inputBuf[0][i] = adjustInput(resizedTmp)
+			inputBuf = adjustInput(resizedTmp)
+			resizedTmp.Close()
+		}
+		tmp.Close()
 	}
 
 	inputBufTensor, _ := tf.NewTensor(inputBuf)
@@ -978,7 +1006,8 @@ func main() {
 		resizedTmp := gocv.NewMat()
 		//defer resizedTmp.Close()
 		gocv.Resize(tmp, &resizedTmp, image.Point{X: 48, Y: 48}, 0, 0, gocv.InterpolationDefault)
-		inputBuf[0][i] = adjustInput(resizedTmp)
+		//inputBuf[0][i] = adjustInput(resizedTmp)
+		inputBuf = adjustInput(resizedTmp)
 	}
 
 	inputBufTensorOnet, _ := tf.NewTensor(inputBuf)
