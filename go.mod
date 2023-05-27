@@ -25,7 +25,7 @@ require (
 	gocv.io/x/gocv v0.32.1 // indirect
 	golang.org/x/image v0.6.0 // indirect
 	golang.org/x/xerrors v0.0.0-20220907171357-04be3eba64a2 // indirect
-	gonum.org/v1/gonum v0.12.0 // indirect
+	gonum.org/v1/gonum v0.13.0 // indirect
 	gonum.org/v1/hdf5 v0.0.0-20210714002203-8c5d23bc6946 // indirect
 	google.golang.org/protobuf v1.30.0 // indirect
 	gorgonia.org/tensor v0.9.24 // indirect
