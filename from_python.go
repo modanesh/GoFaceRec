@@ -701,7 +701,9 @@ func preprocessMat(img gocv.Mat, bbox []float32, landmark [][]float32) gocv.Mat 
 			src[i][0] += 8.0
 		}
 		dst := float32ToFloat64(landmark)
-		M = umeyama(src, dst, true)
+		M = umeyama(dst, src, true)
+		M = M[:len(M)-1]
+		fmt.Printf("Matrix M: %v\n", M)
 	}
 
 	if M == nil {
@@ -727,7 +729,24 @@ func preprocessMat(img gocv.Mat, bbox []float32, landmark [][]float32) gocv.Mat 
 	} else {
 		warped := gocv.NewMat()
 		mMat := float64ToMat(M)
-		gocv.WarpAffine(img, &warped, mMat, image.Point{X: 112, Y: 112})
+		val := img.GetVecbAt(0, 0)
+		fmt.Printf("img[0,0]: %v\n", val)
+		val = img.GetVecbAt(24, 10)
+		fmt.Printf("img[24,10]: %v\n", val)
+
+		gocv.WarpAffine(img, &warped, mMat, image.Point{X: img.Rows(), Y: img.Cols()})
+
+		val = warped.GetVecbAt(0, 0)
+		fmt.Printf("warped[0,0]: %v\n", val)
+		val = warped.GetVecbAt(0, 1)
+		fmt.Printf("warped[0,1]: %v\n", val)
+
+		outPath := filepath.Join("naive_rotated_obama.jpeg")
+		if ok := gocv.IMWrite(outPath, warped); !ok {
+			fmt.Printf("Failed to write image: %s\n")
+			os.Exit(1)
+		}
+
 		return warped
 	}
 }
@@ -753,76 +772,215 @@ func umeyama(src, dst [][]float64, estimateScale bool) [][]float64 {
 	// Subtract mean from src and dst.
 	srcDemean := make([][]float64, num)
 	dstDemean := make([][]float64, num)
-	for i := 0; i < num; i++ {
+	for i := range srcDemean {
 		srcDemean[i] = make([]float64, dim)
 		dstDemean[i] = make([]float64, dim)
+	}
+	for i := 0; i < num; i++ {
 		for j := 0; j < dim; j++ {
 			srcDemean[i][j] = src[i][j] - srcMean[j]
 			dstDemean[i][j] = dst[i][j] - dstMean[j]
 		}
 	}
+	fmt.Printf("src: %v\n", src)
+	fmt.Printf("srcMean: %v\n", srcMean)
+	fmt.Printf("srcDemean: %v\n", srcDemean)
 
-	// Compute covariance matrix.
+	// Eq. (38).
 	A := make([][]float64, dim)
-	for i := 0; i < dim; i++ {
+	for i := range A {
 		A[i] = make([]float64, dim)
+	}
+	for i := 0; i < dim; i++ {
 		for j := 0; j < dim; j++ {
-			sum := 0.0
 			for k := 0; k < num; k++ {
-				sum += srcDemean[k][j] * dstDemean[k][i]
+				A[i][j] += dstDemean[k][i] * srcDemean[k][j]
 			}
-			A[i][j] = sum / float64(num)
+			A[i][j] /= float64(num)
 		}
 	}
 
-	// Compute SVD of covariance matrix.
-	U, _, Vt := svd(A)
-
-	// Compute rotation matrix.
-	R := matmul(U, Vt)
-
-	// Handle the reflection case.
-	if determinant(R) < 0 {
-		Vt[dim-1] = scaleVector(Vt[dim-1], -1)
-		R = matmul(U, Vt)
+	// Eq. (39).
+	d := make([]float64, dim)
+	for i := range d {
+		d[i] = 1.0
+	}
+	if determinant(A) < 0 {
+		d[dim-1] = -1
 	}
 
-	// Compute scale factor.
-	scale := 1.0
-	if estimateScale {
-		sumSquares := 0.0
-		for i := 0; i < dim; i++ {
-			sumSquares += srcDemean[0][i] * srcDemean[0][i]
-		}
-		scale = 1.0 / sumSquares * dotproduct(srcDemean[0], dstDemean[0])
-	}
-
-	// Compute translation vector.
-	t := make([]float64, dim)
-	for i := 0; i < dim; i++ {
-		t[i] = dstMean[i] - scale*dotproduct(R[i], srcMean)
-	}
-
-	// Create the transformation matrix.
 	T := make([][]float64, dim+1)
-	for i := 0; i < dim+1; i++ {
+	for i := range T {
 		T[i] = make([]float64, dim+1)
-		for j := 0; j < dim+1; j++ {
-			if i < dim && j < dim {
-				T[i][j] = scale * R[i][j]
-			} else if i == j && i == dim {
+		for j := range T[i] {
+			if i == j {
 				T[i][j] = 1.0
-			} else {
-				T[i][j] = 0.0
 			}
 		}
 	}
 
+	V, S, U := svd(A)
+	fmt.Printf("Matrix A: %v\n", A)
+	fmt.Printf("Matrix U: %v\n", U)
+	fmt.Printf("Matrix V: %v\n", V)
+	fmt.Printf("Vector d: %v\n", d)
+	fmt.Printf("Matrix S: %v\n", S)
+
+	// Eq. (40) and (43).
+	rank := matrixRank(A)
+	if rank == 0 {
+		for i := range T {
+			for j := range T[i] {
+				T[i][j] = math.NaN()
+			}
+		}
+		return T
+	} else if rank == dim-1 {
+		if determinant(U)*determinant(V) > 0 {
+			for i := 0; i < dim; i++ {
+				for j := 0; j < dim; j++ {
+					T[i][j] = 0
+					for k := 0; k < dim; k++ {
+						T[i][j] += U[i][k] * V[k][j]
+					}
+				}
+			}
+		} else {
+			s := d[dim-1]
+			d[dim-1] = -1
+			Temp := make([][]float64, dim)
+			for i := range Temp {
+				Temp[i] = make([]float64, dim)
+			}
+			for i := 0; i < dim; i++ {
+				for j := 0; j < dim; j++ {
+					if i == j {
+						Temp[i][j] = d[i]
+					}
+				}
+			}
+			for i := 0; i < dim; i++ {
+				for j := 0; j < dim; j++ {
+					T[i][j] = 0
+					for k := 0; k < dim; k++ {
+						T[i][j] += U[i][k] * Temp[k][j]
+					}
+				}
+			}
+			for i := 0; i < dim; i++ {
+				for j := 0; j < dim; j++ {
+					Temp[i][j] = 0
+					for k := 0; k < dim; k++ {
+						Temp[i][j] += T[i][k] * V[k][j]
+					}
+				}
+			}
+			T = Temp
+			d[dim-1] = s
+		}
+	} else {
+		Temp := make([][]float64, dim)
+		for i := range Temp {
+			Temp[i] = make([]float64, dim)
+		}
+		for i := 0; i < dim; i++ {
+			for j := 0; j < dim; j++ {
+				if i == j {
+					Temp[i][j] = d[i]
+				}
+			}
+		}
+		for i := 0; i < dim; i++ {
+			for j := 0; j < dim; j++ {
+				T[i][j] = 0
+				for k := 0; k < dim; k++ {
+					T[i][j] += U[i][k] * Temp[k][j]
+				}
+			}
+		}
+		for i := 0; i < dim; i++ {
+			for j := 0; j < dim; j++ {
+				Temp[i][j] = 0
+				for k := 0; k < dim; k++ {
+					Temp[i][j] += T[i][k] * V[k][j]
+				}
+			}
+		}
+		T = Temp
+	}
+	fmt.Printf("Matrix T 0: %v\n", T)
+
+	var scale float64
+	if estimateScale {
+		// Eq. (41) and (42).
+		var srcVar float64
+		for i := 0; i < dim; i++ {
+			var temp float64
+			for j := 0; j < num; j++ {
+				temp += (src[j][i] - srcMean[i]) * (src[j][i] - srcMean[i])
+			}
+			srcVar += temp / float64(num)
+		}
+		var sumSD float64
+		for i := 0; i < dim; i++ {
+			sumSD += S[0][i] * d[i]
+		}
+		scale = 1.0 / srcVar * sumSD
+		fmt.Printf("srcVar: %v\n", srcVar)
+		fmt.Printf("sumSD: %v\n", sumSD)
+	} else {
+		scale = 1.0
+	}
+	fmt.Printf("Scale: %v\n", scale)
+
 	for i := 0; i < dim; i++ {
-		T[i][dim] = t[i]
+		var temp float64
+		for j := 0; j < dim; j++ {
+			temp += T[i][j] * srcMean[j]
+		}
+		T[i][dim] = dstMean[i] - scale*temp
+	}
+	fmt.Printf("Matrix T 1: %v\n", T)
+
+	for i := 0; i < dim; i++ {
+		for j := 0; j < dim; j++ {
+			T[i][j] *= scale
+		}
+	}
+	fmt.Printf("Matrix T 2: %v\n", T)
+	return T
+}
+
+func matrixRank(A [][]float64) int {
+	U, _, _ := svd(A)
+	rank := 0
+	for i := range U {
+		if U[i][i] > 1e-10 {
+			rank++
+		}
+	}
+	return rank
+}
+
+func determinant(A [][]float64) float64 {
+	n := len(A)
+	if n == 2 {
+		return A[0][0]*A[1][1] - A[0][1]*A[1][0]
 	}
 
-	return T[:2]
+	det := 0.0
+	for i := 0; i < n; i++ {
+		subMatrix := make([][]float64, n-1)
+		for j := range subMatrix {
+			subMatrix[j] = make([]float64, n-1)
+			copy(subMatrix[j], A[j+1])
+			subMatrix[j] = append(subMatrix[j][:i], subMatrix[j][i+1:]...)
+		}
+
+		det += math.Pow(-1, float64(i)) * A[0][i] * determinant(subMatrix)
+	}
+
+	return det
 }
 
 func svd(A [][]float64) (U, S, Vt [][]float64) {
@@ -911,7 +1069,7 @@ func svd(A [][]float64) (U, S, Vt [][]float64) {
 		}
 	}
 
-	return Vt, S, U
+	return U, S, Vt
 }
 
 // Reshape a 1D slice into a 2D slice of the given dimensions
@@ -1082,27 +1240,6 @@ func matmul(A, B [][]float64) [][]float64 {
 	}
 
 	return C
-}
-
-func determinant(A [][]float64) float64 {
-	n := len(A)
-	if n == 2 {
-		return A[0][0]*A[1][1] - A[0][1]*A[1][0]
-	}
-
-	det := 0.0
-	for i := 0; i < n; i++ {
-		subMatrix := make([][]float64, n-1)
-		for j := range subMatrix {
-			subMatrix[j] = make([]float64, n-1)
-			copy(subMatrix[j], A[j+1])
-			subMatrix[j] = append(subMatrix[j][:i], subMatrix[j][i+1:]...)
-		}
-
-		det += math.Pow(-1, float64(i)) * A[0][i] * determinant(subMatrix)
-	}
-
-	return det
 }
 
 func scaleVector(v []float64, s float64) []float64 {
@@ -1725,20 +1862,21 @@ func main() {
 		}
 		b := thirdPickedBoxes[i]
 		sliceImg := preprocessMat(img, b, p)
+
 		//imData := matToSlice(img)
 		//sliceImg := preprocessSlice(imData, b, p)
 
 		fmt.Println("TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT")
-		fmt.Println(sliceImg.Size())
-		fmt.Println(sliceImg.GetFloatAt3(0, 0, 0))
-		fmt.Println(sliceImg.GetFloatAt3(0, 0, 1))
-		fmt.Println(sliceImg.GetFloatAt3(0, 0, 2))
-		fmt.Println(sliceImg.GetFloatAt3(0, 1, 0))
-		fmt.Println(sliceImg.GetFloatAt3(0, 1, 1))
-		fmt.Println(sliceImg.GetFloatAt3(0, 1, 2))
-		fmt.Println(sliceImg.GetFloatAt3(1, 0, 0))
-		fmt.Println(sliceImg.GetFloatAt3(1, 0, 1))
-		fmt.Println(sliceImg.GetFloatAt3(1, 0, 2))
+		fmt.Println(sliceImg.Channels(), sliceImg.Size())
+		fmt.Println(sliceImg.GetFloatAt(0, 0))
+		fmt.Println(sliceImg.GetFloatAt(0, 1))
+		fmt.Println(sliceImg.GetFloatAt(0, 2))
+		fmt.Println(sliceImg.GetFloatAt(1, 0))
+		fmt.Println(sliceImg.GetFloatAt(1, 1))
+		fmt.Println(sliceImg.GetFloatAt(1, 2))
+		fmt.Println(sliceImg.GetFloatAt(2, 0))
+		fmt.Println(sliceImg.GetFloatAt(2, 1))
+		fmt.Println(sliceImg.GetFloatAt(2, 2))
 		//_ = storeSliceToFile(sliceImg, "network_test/sliceImg.txt")
 		if ok := gocv.IMWrite("prosecced_obamad.jpg", sliceImg); !ok {
 			fmt.Printf("Failed to write image: %s\n")
