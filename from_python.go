@@ -1,66 +1,23 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	tf "github.com/galeone/tensorflow/tensorflow/go"
 	tg "github.com/galeone/tfgo"
-	"github.com/nfnt/resize"
 	"github.com/sbinet/npyio"
 	"gocv.io/x/gocv"
 	"gonum.org/v1/gonum/blas/blas64"
 	"gonum.org/v1/gonum/lapack"
 	"gonum.org/v1/gonum/lapack/lapack64"
-	"gorgonia.org/tensor"
 	"image"
-	"image/color"
-	"io/ioutil"
 	"math"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
+	"time"
 )
-
-// FloatImage represents a custom image type that satisfies the image.Image interface
-type FloatImage struct {
-	data [][]float32
-}
-
-func (f FloatImage) ColorModel() color.Model {
-	return color.Gray16Model
-}
-
-func (f FloatImage) Bounds() image.Rectangle {
-	height := len(f.data)
-	width := len(f.data[0])
-	return image.Rect(0, 0, width, height)
-}
-
-func (f FloatImage) At(x, y int) color.Color {
-	return color.Gray16{Y: uint16(f.data[y][x])}
-}
-
-// ConvertFloatImage converts [][]float32 to FloatImage
-func ConvertFloatImage(data [][]float32) *FloatImage {
-	return &FloatImage{data: data}
-}
-
-func matToFloat32Slice(mat gocv.Mat) [][]float32 {
-	rows, cols := mat.Rows(), mat.Cols()
-	slice := make([][]float32, rows)
-
-	for i := 0; i < rows; i++ {
-		rowSlice := make([]float32, cols)
-		for j := 0; j < cols; j++ {
-			val := mat.GetFloatAt(i, j)
-			rowSlice[j] = float32(val)
-		}
-		slice[i] = rowSlice
-	}
-	return slice
-}
 
 func sliceIndex(number int) []int {
 	indexes := make([]int, number)
@@ -167,10 +124,10 @@ func nms(boxes [][]float32, overlapThreshold float64, mode string) []int {
 
 func extractData(npArray [][][]float32, index int) [][]float32 {
 	// Assuming the dimensions of your slice are as follows:
-	var dim1, dim2 int = len(npArray), len(npArray[0])
+	var dim1, dim2 = len(npArray), len(npArray[0])
 
 	// Creating a 2D slice to store the extracted values
-	var extractedData [][]float32 = make([][]float32, dim1)
+	var extractedData = make([][]float32, dim1)
 	for i := 0; i < dim1; i++ {
 		extractedData[i] = make([]float32, dim2)
 	}
@@ -296,6 +253,32 @@ func transpose2D(matrix [][]float32) [][]float32 {
 	return result
 }
 
+func transpose3D(slice [][][]float32) [][][]float32 {
+	var (
+		x = len(slice)
+		y = len(slice[0])
+		z = len(slice[0][0])
+	)
+
+	newSlice := make([][][]float32, z)
+	for i := range newSlice {
+		newSlice[i] = make([][]float32, x)
+		for j := range newSlice[i] {
+			newSlice[i][j] = make([]float32, y)
+		}
+	}
+
+	for i, s := range slice {
+		for j, ss := range s {
+			for k, v := range ss {
+				newSlice[k][i][j] = v
+			}
+		}
+	}
+
+	return newSlice
+}
+
 func flip2D(matrix [][]float32) [][]float32 {
 	for i := 0; i < len(matrix)/2; i++ {
 		matrix[i], matrix[len(matrix)-1-i] = matrix[len(matrix)-1-i], matrix[i]
@@ -304,9 +287,9 @@ func flip2D(matrix [][]float32) [][]float32 {
 }
 
 func flatten4DTo2D(data [][][][]float32) [][]float32 {
-	var dim2, dim3 int = len(data[0]), len(data[0][0])
+	var dim2, dim3 = len(data[0]), len(data[0][0])
 
-	var extractedData [][]float32 = make([][]float32, dim2)
+	var extractedData = make([][]float32, dim2)
 	for i := 0; i < dim2; i++ {
 		extractedData[i] = make([]float32, dim3)
 	}
@@ -355,34 +338,6 @@ func transpose(x [][][][]float32, order []int) [][][][]float32 {
 	return out
 }
 
-func findExtremeValue(slice interface{}, operation string) float32 {
-	switch reflect.TypeOf(slice).Kind() {
-	case reflect.Slice:
-		val := reflect.ValueOf(slice)
-		if val.Len() == 0 {
-			return 0 // Return a default value when the slice is empty
-		}
-		extremeVal := initializeExtremeValue(operation) // Initialize extreme value based on operation
-		for i := 0; i < val.Len(); i++ {
-			elem := val.Index(i).Interface()
-			extreme := findExtremeValue(elem, operation)
-			if isBetter(extreme, extremeVal, operation) {
-				extremeVal = extreme
-			}
-		}
-		return extremeVal
-	default:
-		// Handle non-slice types (e.g., single element)
-		switch slice := slice.(type) {
-		case float32:
-			return slice
-		default:
-			// Return a default value when the element is not a float32
-			return 0
-		}
-	}
-}
-
 func initializeExtremeValue(operation string) float32 {
 	switch operation {
 	case "min":
@@ -403,36 +358,6 @@ func isBetter(candidate float32, currentExtreme float32, operation string) bool 
 	default:
 		return false
 	}
-}
-
-func storeSliceToFile(slice interface{}, filename string) error {
-	// Get the value and kind of the input slice
-	value := reflect.ValueOf(slice)
-	kind := value.Kind()
-
-	// Ensure the input is a slice
-	if kind != reflect.Slice {
-		return fmt.Errorf("input is not a slice")
-	}
-
-	// Flatten the slice
-	flattened, err := flattenSlice(slice)
-	if err != nil {
-		return err
-	}
-
-	// Convert the flattened slice to a string representation
-	dataStr := strings.Trim(strings.Join(strings.Fields(fmt.Sprint(flattened)), " "), "[]")
-
-	// Write the string data to a text file
-	if _, err := os.Stat(filename); err == nil {
-		fmt.Println("File already exists!")
-	} else if errors.Is(err, os.ErrNotExist) {
-		_ = ioutil.WriteFile(filename, []byte(dataStr), 0644)
-	} else {
-		fmt.Println("Schrodinger: file may or may not exist. See err for details.", err)
-	}
-	return nil
 }
 
 func flattenSlice(slice interface{}) ([]interface{}, error) {
@@ -607,34 +532,11 @@ func matToSlice(inData gocv.Mat) [][][]float32 {
 			outData[w][h] = make([]float32, channels)
 			val := inData.GetVecbAt(w, h)
 			for c := 0; c < channels; c++ {
-				outData[w][h][c] = float32(val[c])
+				outData[w][h][c] = float32(val[c]) / 255
 			}
 		}
 	}
 	return outData
-}
-
-func tensorsToFloat64Slices(tensors []*tf.Tensor) ([][]float64, error) {
-	result := make([][]float64, len(tensors))
-
-	for i, t := range tensors {
-		// Get the data from the *tf.Tensor as a 1D []float32 slice
-		data, ok := t.Value().([]float32)
-		if !ok {
-			return nil, fmt.Errorf("expected tensor to be of type []float32, but got %T", t.Value())
-		}
-
-		// Convert the []float32 to []float64
-		float64Data := make([]float64, len(data))
-		for j, v := range data {
-			float64Data[j] = float64(v)
-		}
-
-		// Append the []float64 to the result
-		result[i] = float64Data
-	}
-
-	return result, nil
 }
 
 func CalibrateBox(bbox [][]float32, reg [][]float32) [][]float32 {
@@ -668,20 +570,6 @@ func CalibrateBox(bbox [][]float32, reg [][]float32) [][]float32 {
 		bbox[i][3] += aug[i][3]
 	}
 	return bbox
-}
-
-func float32SliceToPoint2fSlice(float32Slice []float32) []gocv.Point2f {
-	if len(float32Slice)%2 != 0 {
-		panic("float32Slice length must be even.")
-	}
-
-	point2fSlice := make([]gocv.Point2f, len(float32Slice)/2)
-
-	for i := 0; i < len(float32Slice); i += 2 {
-		point2fSlice[i/2] = gocv.Point2f{X: float32Slice[i], Y: float32Slice[i+1]}
-	}
-
-	return point2fSlice
 }
 
 func preprocessMat(img gocv.Mat, bbox []float32, landmark [][]float32) gocv.Mat {
@@ -734,18 +622,11 @@ func preprocessMat(img gocv.Mat, bbox []float32, landmark [][]float32) gocv.Mat 
 		val = img.GetVecbAt(24, 10)
 		fmt.Printf("img[24,10]: %v\n", val)
 
-		gocv.WarpAffine(img, &warped, mMat, image.Point{X: img.Rows(), Y: img.Cols()})
-
+		gocv.WarpAffine(img, &warped, mMat, image.Point{X: 112, Y: 112})
 		val = warped.GetVecbAt(0, 0)
 		fmt.Printf("warped[0,0]: %v\n", val)
 		val = warped.GetVecbAt(0, 1)
 		fmt.Printf("warped[0,1]: %v\n", val)
-
-		outPath := filepath.Join("naive_rotated_obama.jpeg")
-		if ok := gocv.IMWrite(outPath, warped); !ok {
-			fmt.Printf("Failed to write image: %s\n")
-			os.Exit(1)
-		}
 
 		return warped
 	}
@@ -1072,55 +953,6 @@ func svd(A [][]float64) (U, S, Vt [][]float64) {
 	return U, S, Vt
 }
 
-// Reshape a 1D slice into a 2D slice of the given dimensions
-func reshape2D(data []float64, rows, cols int) [][]float64 {
-	result := make([][]float64, rows)
-	for i := 0; i < rows; i++ {
-		result[i] = data[i*cols : (i+1)*cols]
-	}
-	return result
-}
-
-func svdGolubReinsch(A, U, S, Vt [][]float64) {
-	m := len(A)
-	n := len(A[0])
-
-	// Use A^T * A to compute eigenvectors and eigenvalues.
-	AtA := make([][]float64, n)
-	for i := range AtA {
-		AtA[i] = make([]float64, n)
-		for j := range AtA[i] {
-			sum := 0.0
-			for k := 0; k < m; k++ {
-				sum += A[k][i] * A[k][j]
-			}
-			AtA[i][j] = sum
-		}
-	}
-
-	// Compute eigenvalues and eigenvectors of A^T * A.
-	eigenValues, eigenVectors := eigen(AtA)
-
-	// Compute singular values and singular vectors.
-	for i := 0; i < n; i++ {
-		S[i][i] = math.Sqrt(eigenValues[i][0])
-		for j := 0; j < n; j++ {
-			Vt[i][j] = eigenVectors[i][j]
-		}
-	}
-
-	// Compute U from A * V.
-	for i := 0; i < m; i++ {
-		for j := 0; j < m; j++ {
-			sum := 0.0
-			for k := 0; k < n; k++ {
-				sum += A[i][k] * Vt[k][j]
-			}
-			U[i][j] = sum / S[j][j]
-		}
-	}
-}
-
 func eigen(A [][]float64) (values, vectors [][]float64) {
 	// Perform eigenvalue decomposition using QR algorithm with shifts.
 	n := len(A)
@@ -1242,14 +1074,6 @@ func matmul(A, B [][]float64) [][]float64 {
 	return C
 }
 
-func scaleVector(v []float64, s float64) []float64 {
-	result := make([]float64, len(v))
-	for i := range v {
-		result[i] = v[i] * s
-	}
-	return result
-}
-
 func float32ToFloat64(data32 [][]float32) [][]float64 {
 	data64 := make([][]float64, len(data32))
 	for i := range data32 {
@@ -1259,25 +1083,6 @@ func float32ToFloat64(data32 [][]float32) [][]float64 {
 		}
 	}
 	return data64
-}
-
-func float32ToMat(data [][][]float32) gocv.Mat {
-	height := len(data)
-	width := len(data[0])
-	channels := len(data[0][0])
-
-	// Create a new Mat from the flat data.
-	sizes := []int{height, width, channels}
-	mat := gocv.NewMatWithSizes(sizes, gocv.MatTypeCV32FC3)
-
-	for i := 0; i < height; i++ {
-		for j := 0; j < width; j++ {
-			for k := 0; k < channels; k++ {
-				mat.SetFloatAt3(i, j, k, data[i][j][k])
-			}
-		}
-	}
-	return mat
 }
 
 func float64ToMat(data [][]float64) gocv.Mat {
@@ -1295,115 +1100,27 @@ func float64ToMat(data [][]float64) gocv.Mat {
 	return mat
 }
 
-func preprocessSlice(img [][][]float32, bbox []float32, landmark [][]float32) [][][]float32 {
-	var M [][]float64 = nil
-	var det, bb []float32 = nil, nil
-
-	if landmark != nil {
-		src := [][]float64{
-			{30.2946, 51.6963},
-			{65.5318, 51.5014},
-			{48.0252, 71.7366},
-			{33.5493, 92.3655},
-			{62.7299, 92.2041},
-		}
-
-		for i := 0; i < len(src); i++ {
-			src[i][0] += 8.0
-		}
-
-		//	similarity transformation
-		dst := float32ToFloat64(landmark)
-		M = umeyama(src, dst, true)
-	}
-
-	if M == nil {
-		if bbox == nil {
-			det = make([]float32, 4)
-			det[0] = float32(int(float32(len(img[0])) * 0.0625))
-			det[1] = float32(int(float32(len(img)) * 0.0625))
-			det[2] = float32(len(img[0])) - det[0]
-			det[3] = float32(len(img)) - det[1]
-		} else {
-			det = bbox
-		}
-
-		bb = make([]float32, 4)
-		bb[0] = float32(math.Max(float64(det[0]-44.0/2), 0))
-		bb[1] = float32(math.Max(float64(det[1]-44.0/2), 0))
-		bb[2] = float32(math.Min(float64(det[2]+44.0/2), float64(len(img[0]))))
-		bb[3] = float32(math.Min(float64(det[3]+44.0/2), float64(len(img))))
-
-		ret := img[int(bb[1]):int(bb[3])][int(bb[0]):int(bb[2])]
-		retMat := float32ToMat(ret)
-		gocv.Resize(retMat, &retMat, image.Point{X: 112, Y: 112}, 0, 0, gocv.InterpolationLinear)
-		return ret
-	} else {
-		warped := gocv.NewMat()
-		imgMat := float32ToMat(img)
-		gocv.WarpAffine(imgMat, &warped, float64ToMat(M), image.Point{X: 112, Y: 112})
-		return matToSlice(warped)
-	}
+func generateEmbeddings(imgs [][][]float32) *tf.Tensor {
+	transposedImgs := transpose3D(imgs)
+	permutedImgs, _ := tf.NewTensor(transposedImgs)
+	permutedImgs.Reshape([]int64{1, 3, 112, 112})
+	return permutedImgs
 }
 
-func ConvertToFloats(img image.Image) [][]float32 {
-	bounds := img.Bounds()
-	height := bounds.Dy()
-	width := bounds.Dx()
-
-	data := make([][]float32, height)
-	for y := 0; y < height; y++ {
-		data[y] = make([]float32, width)
-		for x := 0; x < width; x++ {
-			grayColor := color.GrayModel.Convert(img.At(x, y)).(color.Gray)
-			data[y][x] = float32(grayColor.Y)
-		}
-	}
-
-	return data
-}
-
-func generateEmbeddings(imgs [][][]float32) *tensor.Dense {
-	mean := []float32{0.0, 0.0, 0.0}
-	std := []float32{1.0, 1.0, 1.0}
-	trans := tensor.New(tensor.WithShape(3), tensor.WithBacking([]float32{
-		1.0 / std[0], 0.0, 0.0,
-		0.0, 1.0 / std[1], 0.0,
-		0.0, 0.0, 1.0 / std[2],
-	}))
-
-	permutedImgs := tensor.New(tensor.WithShape(len(imgs), 3, len(imgs[0]), len(imgs[0][0])), tensor.WithBacking(make([]float32, len(imgs)*3*len(imgs[0])*len(imgs[0][0]))))
-	for i, img := range imgs {
-		imageImage := ConvertFloatImage(img)
-		listImg := resize.Resize(224, 224, imageImage, resize.Lanczos3)
-		img = ConvertToFloats(listImg)
-		for y := 0; y < len(img); y++ {
-			for x := 0; x < len(img[y]); x++ {
-				pixel := img[y][x]
-				permutedImgs.SetAt(pixel/255.0-mean[2], i, 2, y, x)
-			}
-		}
-	}
-	transformedImgs := tensor.New(tensor.WithShape(len(imgs), 3, 224, 224), tensor.WithBacking(make([]float64, len(imgs)*3*224*224)))
-	tensor.Transpose(permutedImgs, 0, 3, 1, 2)
-	tensor.Mul(transformedImgs, trans)
-	return transformedImgs
-}
-
-func normalize(vecs [][]float64) ([][]float64, []float64) {
+func normalize(vecs [][]float32) ([][]float32, []float32) {
 	r := len(vecs)
 	c := len(vecs[0])
-	norms := make([]float64, r)
+	norms := make([]float32, r)
 	for i := 0; i < r; i++ {
 		norm := 0.0
 		for _, v := range vecs[i] {
-			norm += v * v
+			norm += float64(v * v)
 		}
-		norms[i] = math.Sqrt(norm)
+		norms[i] = float32(math.Sqrt(norm))
 	}
-	normed := make([][]float64, r)
+	normed := make([][]float32, r)
 	for i := 0; i < r; i++ {
-		normed[i] = make([]float64, c)
+		normed[i] = make([]float32, c)
 		for j := 0; j < c; j++ {
 			normed[i][j] = vecs[i][j] / norms[i]
 		}
@@ -1411,7 +1128,7 @@ func normalize(vecs [][]float64) ([][]float64, []float64) {
 	return normed, norms
 }
 
-func cosineSimilarityNoPair(fAnch, fTest [][]float64, isNormed bool) []float64 {
+func cosineSimilarityNoPair(fAnch, fTest [][]float32, isNormed bool) []float32 {
 	if !isNormed {
 		fAnch, _ = normalize(fAnch)
 		fTest, _ = normalize(fTest)
@@ -1419,12 +1136,12 @@ func cosineSimilarityNoPair(fAnch, fTest [][]float64, isNormed bool) []float64 {
 	r1 := len(fAnch)
 	r2 := len(fTest)
 
-	result := make([]float64, r1*r2)
+	result := make([]float32, r1*r2)
 	counter := 0
 
 	for i := 0; i < r1; i++ {
 		for j := 0; j < r2; j++ {
-			sum := 0.0
+			sum := float32(0.0)
 			for k := range fAnch[i] {
 				sum += fAnch[i][k] * fTest[j][k]
 			}
@@ -1436,55 +1153,27 @@ func cosineSimilarityNoPair(fAnch, fTest [][]float64, isNormed bool) []float64 {
 	return result
 }
 
-func computeSQNoPair(fAnchor, fTest [][]float64) ([]float64, []float64) {
+func computeSQNoPair(fAnchor, fTest [][]float32) ([]float32, []float32) {
 	fAnchor, qAnchor := normalize(fAnchor)
 	fTest, qTest := normalize(fTest)
 	s := cosineSimilarityNoPair(fAnchor, fTest, true)
 
-	q := make([]float64, len(qAnchor)*len(qTest))
+	q := make([]float32, len(qAnchor)*len(qTest))
 	counter := 0
 	for _, i := range qAnchor {
 		for _, j := range qTest {
-			q[counter] = math.Min(i, j)
+			q[counter] = float32(math.Min(float64(i), float64(j)))
 			counter++
 		}
 	}
 	return s, q
 }
 
-func denseToTFTensor(dense *tensor.Dense) (*tf.Tensor, error) {
-	shape := dense.Shape()
-	data := dense.Data().([]float32) // Assuming the data type is float32
-
-	// Reshape the data to a 1D slice
-	reshapedData := make([]float32, 0, len(data))
-	for _, v := range data {
-		reshapedData = append(reshapedData, v)
-	}
-
-	// Create a *tf.Tensor from the reshaped data
-	reshapedDataTensor, err := tf.NewTensor(reshapedData)
-	if err != nil {
-		return nil, err
-	}
-
-	// Convert tensor.Shape to []int64
-	int64Shape := make([]int64, len(shape))
-	for i, dim := range shape {
-		int64Shape[i] = int64(dim)
-	}
-
-	// Reshape the *tf.Tensor to match the original shape
-	reshapedDataTensor.Reshape(int64Shape)
-
-	return reshapedDataTensor, nil
-}
-
-func similarityNoPair(fAnch [][]float64, fTest [][]float64) []float64 {
+func similarityNoPair(fAnch, fTest [][]float32) []float32 {
 	s, q := computeSQNoPair(fAnch, fTest)
-	alpha := 0.077428
-	beta := 0.125926
-	omega := make([]float64, len(s))
+	alpha := float32(0.077428)
+	beta := float32(0.125926)
+	omega := make([]float32, len(s))
 	for i, v := range s {
 		omega[i] = beta*v - alpha
 		if omega[i] >= 0 {
@@ -1492,23 +1181,35 @@ func similarityNoPair(fAnch [][]float64, fTest [][]float64) []float64 {
 		}
 	}
 
-	result := make([]float64, len(s))
+	result := make([]float32, len(s))
 	for i := range s {
 		result[i] = omega[i]*q[i] + s[i]
 	}
 	return result
 }
 
-func loadNpy(filePath string) ([][]float64, error) {
+func loadNpy(filePath string) ([][]float32, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
 
-	var matrix [][]float64
-	if err := npyio.Read(file, &matrix); err != nil {
+	var flattened []float32
+	if err := npyio.Read(file, &flattened); err != nil {
 		return nil, err
+	}
+
+	// Assuming the second dimension is 512
+	const dim2 = 512
+	dim1 := len(flattened) / dim2
+
+	matrix := make([][]float32, dim1)
+	for i := range matrix {
+		matrix[i] = make([]float32, dim2)
+		for j := range matrix[i] {
+			matrix[i][j] = flattened[i*dim2+j]
+		}
 	}
 
 	return matrix, nil
@@ -1544,18 +1245,6 @@ func getShape(slice interface{}) []int {
 		val = val.Index(0)
 	}
 	return shape
-}
-
-func reshape(slice []float32) [][]float32 {
-	var reshaped [][]float32
-	for i := 0; i < len(slice); i += 9 {
-		end := i + 9
-		if end > len(slice) {
-			end = len(slice)
-		}
-		reshaped = append(reshaped, slice[i:end])
-	}
-	return reshaped
 }
 
 func refineBoxes(totalBoxes [][]float32) [][]float32 {
@@ -1600,15 +1289,20 @@ func main() {
 		minL *= factor
 		factorCount++
 	}
+	pnetModel := tg.LoadModel("./mtcnn_pb/pnet_pb", []string{"serve"}, nil)
+	rnetModel := tg.LoadModel("./mtcnn_pb/rnet_pb", []string{"serve"}, nil)
+	onetModel := tg.LoadModel("./mtcnn_pb/onet_pb", []string{"serve"}, nil)
+	qmfModel := tg.LoadModel("./magface_epoch_00025_pb", []string{"serve"}, nil)
 
 	//************************************************************************************
 	// detect face
 	//************************************************************************************
 
+	start := time.Now()
 	////////////////////////////////////////////
 	// first stage
 	////////////////////////////////////////////
-	pnetModel := tg.LoadModel("./mtcnn_pb/pnet_pb", []string{"serve"}, nil)
+
 	slicedIndex := sliceIndex(len(scales))
 	var totalBoxes [][]float32
 	for _, batch := range slicedIndex {
@@ -1642,7 +1336,6 @@ func main() {
 	////////////////////////////////////////////
 	// second stage
 	////////////////////////////////////////////
-	rnetModel := tg.LoadModel("./mtcnn_pb/rnet_pb", []string{"serve"}, nil)
 	numBox := len(totalBoxes)
 
 	// pad the bbox
@@ -1734,7 +1427,6 @@ func main() {
 	//////////////////////////////////////////////
 	//// third stage
 	//////////////////////////////////////////////
-	onetModel := tg.LoadModel("./mtcnn_pb/onet_pb", []string{"serve"}, nil)
 	numBox = len(squaredBoxes)
 	totalBoxes = squaredBoxes
 	// pad the bbox
@@ -1843,16 +1535,13 @@ func main() {
 		pickedPoints = append(pickedPoints, points[i])
 	}
 
-	fmt.Println("return thirdPickedBoxes")
-
 	//************************************************************************************
 	// align face
 	//************************************************************************************
 	if len(thirdPickedBoxes) == 0 || len(pickedPoints) == 0 {
 		fmt.Println("return nil")
 	}
-
-	//TODO: up to here everything's working fine
+	var pImgs [][][][]float32
 	for i := 0; i < len(pickedPoints); i++ {
 		p := make([][]float32, 5)
 		for j := 0; j < 5; j++ {
@@ -1861,86 +1550,83 @@ func main() {
 			p[j][1] = pickedPoints[i][j+5]
 		}
 		b := thirdPickedBoxes[i]
-		sliceImg := preprocessMat(img, b, p)
+		matFace := preprocessMat(img, b, p)
 
-		//imData := matToSlice(img)
-		//sliceImg := preprocessSlice(imData, b, p)
+		val := matFace.GetVecbAt(0, 0)
+		fmt.Printf("matFace[0,0]: %v\n", val)
+		val = matFace.GetVecbAt(12, 23)
+		fmt.Printf("matFace[12,23]: %v\n", val)
 
-		fmt.Println("TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT")
-		fmt.Println(sliceImg.Channels(), sliceImg.Size())
-		fmt.Println(sliceImg.GetFloatAt(0, 0))
-		fmt.Println(sliceImg.GetFloatAt(0, 1))
-		fmt.Println(sliceImg.GetFloatAt(0, 2))
-		fmt.Println(sliceImg.GetFloatAt(1, 0))
-		fmt.Println(sliceImg.GetFloatAt(1, 1))
-		fmt.Println(sliceImg.GetFloatAt(1, 2))
-		fmt.Println(sliceImg.GetFloatAt(2, 0))
-		fmt.Println(sliceImg.GetFloatAt(2, 1))
-		fmt.Println(sliceImg.GetFloatAt(2, 2))
-		//_ = storeSliceToFile(sliceImg, "network_test/sliceImg.txt")
-		if ok := gocv.IMWrite("prosecced_obamad.jpg", sliceImg); !ok {
-			fmt.Printf("Failed to write image: %s\n")
-		}
-
+		sliceFace := matToSlice(matFace)
+		pImgs = append(pImgs, sliceFace)
 	}
 
 	////************************************************************************************
 	//// recognize face
 	////************************************************************************************
-	//qmfModel := tg.LoadModel("./magface_epoch_00025_pb", []string{"serve"}, nil)
-	//if len(images) == 0 {
-	//	fmt.Println("return nil")
-	//}
-	//transformedFaces := generateEmbeddings(images)
-	//transformedFacesTFTensor, err := denseToTFTensor(transformedFaces)
-	//
-	//frameEmbeddings := qmfModel.Exec([]tf.Output{
-	//	qmfModel.Op("PartitionedCall", 0),
-	//}, map[tf.Output]*tf.Tensor{
-	//	qmfModel.Op("serving_default_input.1", 0): transformedFacesTFTensor,
-	//})
-	//
-	//filePath := "./reg_embeddings.npy"
-	//regEmbeddings, err := loadNpy(filePath)
-	//if err != nil {
-	//	fmt.Println("Error:", err)
-	//	return
-	//}
-	//frameEmbeddingsFloat64, err := tensorsToFloat64Slices(frameEmbeddings)
-	//qmfScores := similarityNoPair(frameEmbeddingsFloat64, regEmbeddings)
-	//regFiles, _ := getRegFiles("./_data/aligned_camera_data_anchor")
-	//bSize := len(regFiles)
-	//nB := int(math.Ceil(float64(len(qmfScores)) / float64(bSize)))
-	//
-	//classIDs := make([]string, nB)
-	//recScores := make([]float64, nB)
-	//targetTh := -0.4
-	//
-	//for i := 0; i < nB; i++ {
-	//	startIndex := i * bSize
-	//	endIndex := (i + 1) * bSize
-	//	if endIndex > len(qmfScores) {
-	//		endIndex = len(qmfScores)
-	//	}
-	//	qmfSlice := qmfScores[startIndex:endIndex]
-	//
-	//	maxScore := qmfSlice[0]
-	//	maxIndex := 0
-	//	for j, score := range qmfSlice {
-	//		if score > maxScore {
-	//			maxScore = score
-	//			maxIndex = j
-	//		}
-	//	}
-	//
-	//	if maxScore > targetTh {
-	//		classIDs[i] = filepath.Base(filepath.Dir(regFiles[maxIndex]))
-	//	} else {
-	//		classIDs[i] = "unknown"
-	//	}
-	//	recScores[i] = maxScore
-	//}
-	//
-	//fmt.Println(classIDs)
-	//fmt.Println(recScores)
+	if len(pImgs) == 0 {
+		fmt.Println("return nil")
+	}
+
+	for _, pImg := range pImgs {
+		transformedFaces := generateEmbeddings(pImg)
+		frameEmbeddings := qmfModel.Exec([]tf.Output{
+			qmfModel.Op("PartitionedCall", 0),
+		}, map[tf.Output]*tf.Tensor{
+			qmfModel.Op("serving_default_input.1", 0): transformedFaces,
+		})
+		frameEmbeddingsFloat32, ok := frameEmbeddings[0].Value().([][]float32)
+		if !ok {
+			fmt.Println("Failed to convert rNetOutput to [][]float32")
+		}
+
+		filePath := "./_data/aligned_camera_data_anchor/embeddings.npy"
+		regEmbeddings, err := loadNpy(filePath)
+		if err != nil {
+			fmt.Println("Error:", err)
+			return
+		}
+
+		qmfScores := similarityNoPair(frameEmbeddingsFloat32, regEmbeddings)
+		regFiles, _ := getRegFiles("./_data/aligned_camera_data_anchor")
+		bSize := len(regFiles)
+		nB := int(math.Ceil(float64(len(qmfScores)) / float64(bSize)))
+
+		classIDs := make([]string, nB)
+		recScores := make([]float32, nB)
+		targetTh := float32(-0.4)
+
+		for i := 0; i < nB; i++ {
+			startIndex := i * bSize
+			endIndex := (i + 1) * bSize
+			if endIndex > len(qmfScores) {
+				endIndex = len(qmfScores)
+			}
+			qmfSlice := qmfScores[startIndex:endIndex]
+
+			maxScore := qmfSlice[0]
+			maxIndex := 0
+			for j, score := range qmfSlice {
+				if score > maxScore {
+					maxScore = score
+					maxIndex = j
+				}
+			}
+
+			if maxScore > targetTh {
+				classIDs[i] = filepath.Base(filepath.Dir(regFiles[maxIndex]))
+			} else {
+				classIDs[i] = "unknown"
+			}
+			recScores[i] = maxScore
+		}
+
+		fmt.Println("----------------- classIDs ------->", classIDs)
+		fmt.Println("----------------- recScores ------->", recScores)
+	}
+
+	elapsed := time.Since(start)
+	elapsedMilliseconds := elapsed.Milliseconds()
+
+	fmt.Printf("Execution time: %d milliseconds\n", elapsedMilliseconds)
 }
