@@ -1289,10 +1289,10 @@ func main() {
 		minL *= factor
 		factorCount++
 	}
-	pnetModel := tg.LoadModel("./mtcnn_pb/pnet_pb", []string{"serve"}, nil)
-	rnetModel := tg.LoadModel("./mtcnn_pb/rnet_pb", []string{"serve"}, nil)
-	onetModel := tg.LoadModel("./mtcnn_pb/onet_pb", []string{"serve"}, nil)
-	qmfModel := tg.LoadModel("./magface_epoch_00025_pb", []string{"serve"}, nil)
+	pnetModel := tg.LoadModel("./models/mtcnn_pb/pnet_pb", []string{"serve"}, nil)
+	rnetModel := tg.LoadModel("./models/mtcnn_pb/rnet_pb", []string{"serve"}, nil)
+	onetModel := tg.LoadModel("./models/mtcnn_pb/onet_pb", []string{"serve"}, nil)
+	qmfModel := tg.LoadModel("./models/magface_epoch_00025_pb", []string{"serve"}, nil)
 
 	//************************************************************************************
 	// detect face
