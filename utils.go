@@ -252,3 +252,13 @@ func reshape(slice []float32) [][]float32 {
 	}
 	return reshaped
 }
+
+func getShape(slice interface{}) []int {
+	var shape []int
+	val := reflect.ValueOf(slice)
+	for val.Kind() == reflect.Slice {
+		shape = append(shape, val.Len())
+		val = val.Index(0)
+	}
+	return shape
+}
