@@ -1270,6 +1270,10 @@ func refineBoxes(totalBoxes [][]float32) [][]float32 {
 }
 
 func main() {
+
+	//************************************************************************************
+	// preprocessing and loading
+	//************************************************************************************
 	filename := "./obama.jpg"
 
 	img := gocv.IMRead(filename, gocv.IMReadColor)
@@ -1293,6 +1297,16 @@ func main() {
 	rnetModel := tg.LoadModel("./models/mtcnn_pb/rnet_pb", []string{"serve"}, nil)
 	onetModel := tg.LoadModel("./models/mtcnn_pb/onet_pb", []string{"serve"}, nil)
 	qmfModel := tg.LoadModel("./models/magface_epoch_00025_pb", []string{"serve"}, nil)
+
+	filePath := "./_data/aligned_camera_data_anchor/embeddings.npy"
+	regEmbeddings, err := loadNpy(filePath)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+
+	regFiles, _ := getRegFiles("./_data/aligned_camera_data_anchor")
+	bSize := len(regFiles)
 
 	//************************************************************************************
 	// detect face
@@ -1333,9 +1347,14 @@ func main() {
 		totalBoxes[i][3] = float32(math.Round(float64(totalBoxes[i][3])))
 	}
 
+	elapsed := time.Since(start)
+	elapsedMilliseconds := elapsed.Milliseconds()
+	fmt.Printf("----------------> First detection execution time: %d milliseconds\n", elapsedMilliseconds)
+
 	////////////////////////////////////////////
 	// second stage
 	////////////////////////////////////////////
+	detection2Start := time.Now()
 	numBox := len(totalBoxes)
 
 	// pad the bbox
@@ -1424,9 +1443,14 @@ func main() {
 		}
 	}
 
+	elapsed = time.Since(detection2Start)
+	elapsedMilliseconds = elapsed.Milliseconds()
+	fmt.Printf("----------------> Second detection execution time: %d milliseconds\n", elapsedMilliseconds)
+
 	//////////////////////////////////////////////
 	//// third stage
 	//////////////////////////////////////////////
+	detection3Start := time.Now()
 	numBox = len(squaredBoxes)
 	totalBoxes = squaredBoxes
 	// pad the bbox
@@ -1534,10 +1558,14 @@ func main() {
 		thirdPickedBoxes = append(thirdPickedBoxes, calibratedBoxes[i])
 		pickedPoints = append(pickedPoints, points[i])
 	}
+	elapsed = time.Since(detection3Start)
+	elapsedMilliseconds = elapsed.Milliseconds()
+	fmt.Printf("----------------> Third detection execution time: %d milliseconds\n", elapsedMilliseconds)
 
 	//************************************************************************************
 	// align face
 	//************************************************************************************
+	alignStart := time.Now()
 	if len(thirdPickedBoxes) == 0 || len(pickedPoints) == 0 {
 		fmt.Println("return nil")
 	}
@@ -1560,10 +1588,14 @@ func main() {
 		sliceFace := matToSlice(matFace)
 		pImgs = append(pImgs, sliceFace)
 	}
+	elapsed = time.Since(alignStart)
+	elapsedMilliseconds = elapsed.Milliseconds()
+	fmt.Printf("----------------> Face alignment execution time: %d milliseconds\n", elapsedMilliseconds)
 
 	////************************************************************************************
 	//// recognize face
 	////************************************************************************************
+	recognitionStart := time.Now()
 	if len(pImgs) == 0 {
 		fmt.Println("return nil")
 	}
@@ -1580,16 +1612,7 @@ func main() {
 			fmt.Println("Failed to convert rNetOutput to [][]float32")
 		}
 
-		filePath := "./_data/aligned_camera_data_anchor/embeddings.npy"
-		regEmbeddings, err := loadNpy(filePath)
-		if err != nil {
-			fmt.Println("Error:", err)
-			return
-		}
-
 		qmfScores := similarityNoPair(frameEmbeddingsFloat32, regEmbeddings)
-		regFiles, _ := getRegFiles("./_data/aligned_camera_data_anchor")
-		bSize := len(regFiles)
 		nB := int(math.Ceil(float64(len(qmfScores)) / float64(bSize)))
 
 		classIDs := make([]string, nB)
@@ -1625,8 +1648,11 @@ func main() {
 		fmt.Println("----------------- recScores ------->", recScores)
 	}
 
-	elapsed := time.Since(start)
-	elapsedMilliseconds := elapsed.Milliseconds()
+	elapsed = time.Since(recognitionStart)
+	elapsedMilliseconds = elapsed.Milliseconds()
+	fmt.Printf("----------------> Face recognition execution time: %d milliseconds\n", elapsedMilliseconds)
 
-	fmt.Printf("Execution time: %d milliseconds\n", elapsedMilliseconds)
+	elapsed = time.Since(start)
+	elapsedMilliseconds = elapsed.Milliseconds()
+	fmt.Printf("----------------> Total execution time: %d milliseconds\n", elapsedMilliseconds)
 }
