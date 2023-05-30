@@ -1237,16 +1237,6 @@ func getRegFiles(regDataPath string) ([]string, error) {
 	return regFiles, nil
 }
 
-func getShape(slice interface{}) []int {
-	var shape []int
-	val := reflect.ValueOf(slice)
-	for val.Kind() == reflect.Slice {
-		shape = append(shape, val.Len())
-		val = val.Index(0)
-	}
-	return shape
-}
-
 func refineBoxes(totalBoxes [][]float32) [][]float32 {
 	bbW := make([]float32, len(totalBoxes))
 	bbH := make([]float32, len(totalBoxes))
@@ -1269,54 +1259,7 @@ func refineBoxes(totalBoxes [][]float32) [][]float32 {
 	return refined
 }
 
-func main() {
-
-	//************************************************************************************
-	// preprocessing and loading
-	//************************************************************************************
-	filename := "./obama.jpg"
-
-	img := gocv.IMRead(filename, gocv.IMReadColor)
-	defer img.Close()
-
-	height := img.Size()[0]
-	width := img.Size()[1]
-	minDetSize := 12
-	minSize := 50
-	var scales []float64
-	m := float64(minDetSize) / float64(minSize)
-	minL := math.Min(float64(height), float64(width)) * m
-	factorCount := 0
-	factor := 0.709
-	for minL > float64(minDetSize) {
-		scales = append(scales, m*math.Pow(factor, float64(factorCount)))
-		minL *= factor
-		factorCount++
-	}
-	pnetModel := tg.LoadModel("./models/mtcnn_pb/pnet_pb", []string{"serve"}, nil)
-	rnetModel := tg.LoadModel("./models/mtcnn_pb/rnet_pb", []string{"serve"}, nil)
-	onetModel := tg.LoadModel("./models/mtcnn_pb/onet_pb", []string{"serve"}, nil)
-	qmfModel := tg.LoadModel("./models/magface_epoch_00025_pb", []string{"serve"}, nil)
-
-	filePath := "./_data/aligned_camera_data_anchor/embeddings.npy"
-	regEmbeddings, err := loadNpy(filePath)
-	if err != nil {
-		fmt.Println("Error:", err)
-		return
-	}
-
-	regFiles, _ := getRegFiles("./_data/aligned_camera_data_anchor")
-	bSize := len(regFiles)
-
-	//************************************************************************************
-	// detect face
-	//************************************************************************************
-
-	start := time.Now()
-	////////////////////////////////////////////
-	// first stage
-	////////////////////////////////////////////
-
+func firstStage(scales []float64, img gocv.Mat, pnetModel *tg.Model) [][]float32 {
 	slicedIndex := sliceIndex(len(scales))
 	var totalBoxes [][]float32
 	for _, batch := range slicedIndex {
@@ -1346,15 +1289,10 @@ func main() {
 		totalBoxes[i][2] = float32(math.Round(float64(totalBoxes[i][2])))
 		totalBoxes[i][3] = float32(math.Round(float64(totalBoxes[i][3])))
 	}
+	return totalBoxes
+}
 
-	elapsed := time.Since(start)
-	elapsedMilliseconds := elapsed.Milliseconds()
-	fmt.Printf("----------------> First detection execution time: %d milliseconds\n", elapsedMilliseconds)
-
-	////////////////////////////////////////////
-	// second stage
-	////////////////////////////////////////////
-	detection2Start := time.Now()
+func secondStage(totalBoxes [][]float32, width, height int, img gocv.Mat, rnetModel *tg.Model) [][]float32 {
 	numBox := len(totalBoxes)
 
 	// pad the bbox
@@ -1442,22 +1380,17 @@ func main() {
 			squaredBoxes[i][j] = float32(math.Round(float64(squaredBoxes[i][j])))
 		}
 	}
+	return squaredBoxes
+}
 
-	elapsed = time.Since(detection2Start)
-	elapsedMilliseconds = elapsed.Milliseconds()
-	fmt.Printf("----------------> Second detection execution time: %d milliseconds\n", elapsedMilliseconds)
-
-	//////////////////////////////////////////////
-	//// third stage
-	//////////////////////////////////////////////
-	detection3Start := time.Now()
-	numBox = len(squaredBoxes)
-	totalBoxes = squaredBoxes
+func thirdStage(squaredBoxes [][]float32, width, height int, img gocv.Mat, onetModel *tg.Model) ([][]float32, [][]float32) {
+	numBox := len(squaredBoxes)
+	totalBoxes := squaredBoxes
 	// pad the bbox
-	dy, edy, dx, edx, y, ey, x, ex, tmpw, tmph = pad(totalBoxes, float32(width), float32(height))
+	dy, edy, dx, edx, y, ey, x, ex, tmpw, tmph := pad(totalBoxes, float32(width), float32(height))
 
 	// (3, 48, 48) is the input shape for ONet
-	inputBuf = make([][][][]float32, numBox)
+	inputBuf := make([][][][]float32, numBox)
 	for i := 0; i < numBox; i++ {
 		tmp := gocv.NewMatWithSize(int(tmph[i]), int(tmpw[i]), gocv.MatTypeCV8UC3)
 		defer tmp.Close()
@@ -1477,8 +1410,8 @@ func main() {
 		inputBuf[i] = adjustInput(resized)[0]
 	}
 
-	inputBufTensor, _ = tf.NewTensor(inputBuf)
-	output = onetModel.Exec([]tf.Output{
+	inputBufTensor, _ := tf.NewTensor(inputBuf)
+	output := onetModel.Exec([]tf.Output{
 		onetModel.Op("PartitionedCall", 0),
 		onetModel.Op("PartitionedCall", 1),
 		onetModel.Op("PartitionedCall", 2),
@@ -1498,19 +1431,19 @@ func main() {
 		fmt.Println("Failed to convert rNetOutput to [][]float64")
 	}
 
-	score = make([]float32, len(oNetOutput2))
+	score := make([]float32, len(oNetOutput2))
 	for i, v := range oNetOutput2 {
 		score[i] = v[1]
 	}
 
-	passed = make([]int, 0)
+	passed := make([]int, 0)
 	for i, v := range score {
 		if v > 0.8 {
 			passed = append(passed, i)
 		}
 	}
 
-	totalBoxesNew = make([][]float32, 0)
+	totalBoxesNew := make([][]float32, 0)
 	for _, i := range passed {
 		totalBoxesNew = append(totalBoxesNew, totalBoxes[i])
 	}
@@ -1523,7 +1456,7 @@ func main() {
 		totalBoxes[i][4] = oNetOutput2[idx][1]
 	}
 
-	reg = make([][]float32, len(passed))
+	reg := make([][]float32, len(passed))
 	for i, idx := range passed {
 		reg[i] = oNetOutput1[idx]
 	}
@@ -1549,8 +1482,8 @@ func main() {
 	}
 
 	// nms
-	calibratedBoxes = CalibrateBox(totalBoxes, reg)
-	pick = nms(calibratedBoxes, 0.7, "Min")
+	calibratedBoxes := CalibrateBox(totalBoxes, reg)
+	pick := nms(calibratedBoxes, 0.7, "Min")
 
 	var thirdPickedBoxes [][]float32
 	var pickedPoints [][]float32
@@ -1558,14 +1491,10 @@ func main() {
 		thirdPickedBoxes = append(thirdPickedBoxes, calibratedBoxes[i])
 		pickedPoints = append(pickedPoints, points[i])
 	}
-	elapsed = time.Since(detection3Start)
-	elapsedMilliseconds = elapsed.Milliseconds()
-	fmt.Printf("----------------> Third detection execution time: %d milliseconds\n", elapsedMilliseconds)
+	return thirdPickedBoxes, pickedPoints
+}
 
-	//************************************************************************************
-	// align face
-	//************************************************************************************
-	alignStart := time.Now()
+func alignFace(thirdPickedBoxes, pickedPoints [][]float32, img gocv.Mat) [][][][]float32 {
 	if len(thirdPickedBoxes) == 0 || len(pickedPoints) == 0 {
 		fmt.Println("return nil")
 	}
@@ -1588,25 +1517,26 @@ func main() {
 		sliceFace := matToSlice(matFace)
 		pImgs = append(pImgs, sliceFace)
 	}
-	elapsed = time.Since(alignStart)
-	elapsedMilliseconds = elapsed.Milliseconds()
-	fmt.Printf("----------------> Face alignment execution time: %d milliseconds\n", elapsedMilliseconds)
+	return pImgs
+}
 
-	////************************************************************************************
-	//// recognize face
-	////************************************************************************************
-	recognitionStart := time.Now()
+func recognizeFace(pImgs [][][][]float32, qmfModel *tg.Model, regEmbeddings [][]float32, bSize int, regFiles []string) {
 	if len(pImgs) == 0 {
 		fmt.Println("return nil")
 	}
 
 	for _, pImg := range pImgs {
 		transformedFaces := generateEmbeddings(pImg)
+		recognitionStart_1 := time.Now()
 		frameEmbeddings := qmfModel.Exec([]tf.Output{
 			qmfModel.Op("PartitionedCall", 0),
 		}, map[tf.Output]*tf.Tensor{
 			qmfModel.Op("serving_default_input.1", 0): transformedFaces,
 		})
+		elapsed := time.Since(recognitionStart_1)
+		elapsedMilliseconds := elapsed.Milliseconds()
+		fmt.Printf("----------------> ForwardPass execution time: %d milliseconds\n", elapsedMilliseconds)
+
 		frameEmbeddingsFloat32, ok := frameEmbeddings[0].Value().([][]float32)
 		if !ok {
 			fmt.Println("Failed to convert rNetOutput to [][]float32")
@@ -1647,11 +1577,95 @@ func main() {
 		fmt.Println("----------------- classIDs ------->", classIDs)
 		fmt.Println("----------------- recScores ------->", recScores)
 	}
+}
 
+func main() {
+
+	//************************************************************************************
+	// preprocessing and loading
+	//************************************************************************************
+	filename := os.Args[1]
+
+	img := gocv.IMRead(filename, gocv.IMReadColor)
+	defer img.Close()
+
+	height := img.Size()[0]
+	width := img.Size()[1]
+	minDetSize := 12
+	minSize := 50
+	var scales []float64
+	m := float64(minDetSize) / float64(minSize)
+	minL := math.Min(float64(height), float64(width)) * m
+	factorCount := 0
+	factor := 0.709
+	for minL > float64(minDetSize) {
+		scales = append(scales, m*math.Pow(factor, float64(factorCount)))
+		minL *= factor
+		factorCount++
+	}
+	pnetModel := tg.LoadModel("./models/mtcnn_pb/pnet_pb", []string{"serve"}, nil)
+	rnetModel := tg.LoadModel("./models/mtcnn_pb/rnet_pb", []string{"serve"}, nil)
+	onetModel := tg.LoadModel("./models/mtcnn_pb/onet_pb", []string{"serve"}, nil)
+	qmfModel := tg.LoadModel("./models/magface_epoch_00025_pb", []string{"serve"}, nil)
+
+	filePath := "./_data/aligned_camera_data_anchor/embeddings.npy"
+	regEmbeddings, err := loadNpy(filePath)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+
+	regFiles, _ := getRegFiles("./_data/aligned_camera_data_anchor")
+	bSize := len(regFiles)
+
+	//************************************************************************************
+	// detect face
+	//************************************************************************************
+
+	////////////////////////////////////////////
+	// first stage
+	////////////////////////////////////////////
+	start := time.Now()
+	totalBoxes := firstStage(scales, img, pnetModel)
+	elapsed := time.Since(start)
+	elapsedMilliseconds := elapsed.Milliseconds()
+	fmt.Printf("----------------> First detection execution time: %d milliseconds\n", elapsedMilliseconds)
+
+	////////////////////////////////////////////
+	// second stage
+	////////////////////////////////////////////
+	detection2Start := time.Now()
+	squaredBoxes := secondStage(totalBoxes, width, height, img, rnetModel)
+	elapsed = time.Since(detection2Start)
+	elapsedMilliseconds = elapsed.Milliseconds()
+	fmt.Printf("----------------> Second detection execution time: %d milliseconds\n", elapsedMilliseconds)
+
+	//////////////////////////////////////////////
+	//// third stage
+	//////////////////////////////////////////////
+	detection3Start := time.Now()
+	thirdPickedBoxes, pickedPoints := thirdStage(squaredBoxes, width, height, img, onetModel)
+	elapsed = time.Since(detection3Start)
+	elapsedMilliseconds = elapsed.Milliseconds()
+	fmt.Printf("----------------> Third detection execution time: %d milliseconds\n", elapsedMilliseconds)
+
+	//************************************************************************************
+	// align face
+	//************************************************************************************
+	alignStart := time.Now()
+	pImgs := alignFace(thirdPickedBoxes, pickedPoints, img)
+	elapsed = time.Since(alignStart)
+	elapsedMilliseconds = elapsed.Milliseconds()
+	fmt.Printf("----------------> Face alignment execution time: %d milliseconds\n", elapsedMilliseconds)
+
+	////************************************************************************************
+	//// recognize face
+	////************************************************************************************
+	recognitionStart := time.Now()
+	recognizeFace(pImgs, qmfModel, regEmbeddings, bSize, regFiles)
 	elapsed = time.Since(recognitionStart)
 	elapsedMilliseconds = elapsed.Milliseconds()
 	fmt.Printf("----------------> Face recognition execution time: %d milliseconds\n", elapsedMilliseconds)
-
 	elapsed = time.Since(start)
 	elapsedMilliseconds = elapsed.Milliseconds()
 	fmt.Printf("----------------> Total execution time: %d milliseconds\n", elapsedMilliseconds)
