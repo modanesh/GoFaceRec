@@ -80,4 +80,4 @@ For example, the function [`adjustInput()`](https://github.com/modanesh/GoFaceRe
 In contrast, these type conversions are done pretty easy and fast in Python.
 
 ### ToDo
-- [ ] Check why recognition model takes so long for a forward pass. In Python, it takes about 0.5 milliseconds while in Go it takes about 5500 milliseconds.
+- [X] Check why recognition model takes so long for a forward pass. In Python, it takes about 0.5 milliseconds while in Go it takes about 5500 milliseconds. For the first run, in Go, the session instantiation takes a long time. For next runs, Go runs pretty fast. [Take a look at this issue](https://github.com/galeone/tfgo/issues/4).
