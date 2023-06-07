@@ -11,6 +11,13 @@ This project is tested using `Go 1.17` on Ubuntu 20.04. Except for `tfgo`, lates
 
 For `gocv`, the version of `OpenCV` installed is `4.7`. And for `tfgo`, I installed [this version](https://github.com/galeone/tfgo) instead of the official one.
 
+
+### Installing
+Just run the following command in you project in order to install this package:
+```shell
+go get github.com/modanesh/GoFaceRec@v0.1.1
+```
+
 ### Converting models
 There are many ways to convert a non-TF model to a TF one. For that purpose, I used ONNX as an intermediary to convert 
 the [QMagFace's model](https://github.com/pterhoer/QMagFace) from PyTorch to TF. 
