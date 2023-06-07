@@ -74,9 +74,14 @@ Finally, once the face is detected and aligned, the recognition phase can start.
 
 Use the bellow command to run the code:
 ```shell
-go run main.go IMAGE.jpg
+go run main.go IMAGE.jpg path/to/REGISTERED_IMAGES path/to/EMBEDDINGS.npy path/to/MTCNN_MODELS_DIR path/to/MAGFACE_MODEL_DIR 
 ```
-
+where:
+- `IMAGE.jpg`: path to the given image
+- `path/to/REGISTERED_IMAGES`: directory containing register images
+- `path/to/EMBEDDINGS.npy`: the embeddings extracted from the register images using the [Python's QMagFace implementation](https://github.com/pterhoer/QMagFace)
+- `path/to/MTCNN_MODELS_DIR`: directory containing tensorflow models for MTCNN
+- `path/to/MAGFACE_MODEL_DIR`: directory containing tensorflow model for MagFace
 
 ### Challenges
 

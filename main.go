@@ -1584,9 +1584,13 @@ func main() {
 	//************************************************************************************
 	// preprocessing and loading
 	//************************************************************************************
-	filename := os.Args[1]
+	imagePath := os.Args[1]
+	regFilesPath := os.Args[2]
+	embeddingsFilePath := os.Args[3]
+	mtcnnModelPath := os.Args[4]
+	magfaceModelPath := os.Args[5]
 
-	img := gocv.IMRead(filename, gocv.IMReadColor)
+	img := gocv.IMRead(imagePath, gocv.IMReadColor)
 	defer img.Close()
 
 	height := img.Size()[0]
@@ -1603,19 +1607,18 @@ func main() {
 		minL *= factor
 		factorCount++
 	}
-	pnetModel := tg.LoadModel("./models/mtcnn_pb/pnet_pb", []string{"serve"}, nil)
-	rnetModel := tg.LoadModel("./models/mtcnn_pb/rnet_pb", []string{"serve"}, nil)
-	onetModel := tg.LoadModel("./models/mtcnn_pb/onet_pb", []string{"serve"}, nil)
-	qmfModel := tg.LoadModel("./models/magface_epoch_00025_pb", []string{"serve"}, nil)
+	pnetModel := tg.LoadModel(mtcnnModelPath+"/pnet_pb", []string{"serve"}, nil)
+	rnetModel := tg.LoadModel(mtcnnModelPath+"/rnet_pb", []string{"serve"}, nil)
+	onetModel := tg.LoadModel(mtcnnModelPath+"/onet_pb", []string{"serve"}, nil)
+	qmfModel := tg.LoadModel(magfaceModelPath, []string{"serve"}, nil)
 
-	filePath := "./_data/aligned_camera_data_anchor/embeddings.npy"
-	regEmbeddings, err := loadNpy(filePath)
+	regEmbeddings, err := loadNpy(embeddingsFilePath)
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
 	}
 
-	regFiles, _ := getRegFiles("./_data/aligned_camera_data_anchor")
+	regFiles, _ := getRegFiles(regFilesPath)
 	bSize := len(regFiles)
 
 	//************************************************************************************
