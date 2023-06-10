@@ -1579,6 +1579,27 @@ func recognizeFace(pImgs [][][][]float32, qmfModel *tg.Model, regEmbeddings [][]
 	}
 }
 
+func fakeRun(net *tg.Model, outputOpName string, s0, s1, s2 int) {
+	fakeData := make([][][][]float32, 1)
+	fakeData[0] = make([][][]float32, s0)
+	for i := 0; i < s0; i++ {
+		fakeData[0][i] = make([][]float32, s1)
+		for j := 0; j < s1; j++ {
+			fakeData[0][i][j] = make([]float32, s2)
+			for k := 0; k < s2; k++ {
+				fakeData[0][i][j][k] = 1.0
+			}
+		}
+	}
+	fakeInput, _ := tf.NewTensor(fakeData)
+
+	_ = net.Exec([]tf.Output{
+		net.Op("PartitionedCall", 0),
+	}, map[tf.Output]*tf.Tensor{
+		net.Op(outputOpName, 0): fakeInput,
+	})
+}
+
 func main() {
 
 	//************************************************************************************
@@ -1620,6 +1641,11 @@ func main() {
 
 	regFiles, _ := getRegFiles(regFilesPath)
 	bSize := len(regFiles)
+
+	fakeRun(pnetModel, "serving_default_input_1", 12, 12, 3)
+	fakeRun(rnetModel, "serving_default_input_2", 24, 24, 3)
+	fakeRun(onetModel, "serving_default_input_3", 48, 48, 3)
+	fakeRun(qmfModel, "serving_default_input.1", 3, 112, 112)
 
 	//************************************************************************************
 	// detect face
