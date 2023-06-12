@@ -27,6 +27,12 @@ model to TF.
 
 Some of the code in the [model_converter.py](model_converter.py) is taken from the official [QMagFace's implementation](https://github.com/pterhoer/QMagFace).
 
+For this project, you may download the `MTCNN` and `MagFace` tensorflow models from the following URL:
+
+| Model   | URL            |
+|---------|----------------|
+| MTCNN   | [Google Drive](https://drive.google.com/drive/folders/1_H_2qAdUfyKT8yyP9cxn0m20mMZe_yjg?usp=sharing)|
+| MagFace | [Google Drive](https://drive.google.com/drive/folders/136zEa3-6ve31HFse2sVgTi-eWkiLtfpk?usp=sharing)|
 
 ### Extracting layers
 
@@ -64,13 +70,15 @@ essential to run the model in tfgo.
 ### Running the model
 
 This project uses MTCNN for face detection and QMagFace for face recognition. For MTCNN, three stages (PNet, RNet, ONet) have been used in a close fashion similar to [FaceNet](https://github.com/davidsandberg/facenet). Each stage is done in its corresponding function:
-- First stage (PNet): [`totalBoxes := firstStage(scales, img, pnetModel)`](https://github.com/modanesh/GoFaceRec/blob/main/main.go?plain=1#L1639)
-- Second stage (RNet): [`squaredBoxes := secondStage(totalBoxes, width, height, img, rnetModel)`](https://github.com/modanesh/GoFaceRec/blob/main/main.go?plain=1#L1648)
-- Third stage (ONet): [`thirdPickedBoxes, pickedPoints := thirdStage(squaredBoxes, width, height, img, onetModel)`](https://github.com/modanesh/GoFaceRec/blob/main/main.go?plain=1#L1657)
+- First stage (PNet): [`totalBoxes := firstStage(scales, img, pnetModel)`](https://github.com/modanesh/GoFaceRec/blob/main/main.go?plain=1#L1658)
+- Second stage (RNet): [`squaredBoxes := secondStage(totalBoxes, width, height, img, rnetModel)`](https://github.com/modanesh/GoFaceRec/blob/main/main.go?plain=1#L1667)
+- Third stage (ONet): [`thirdPickedBoxes, pickedPoints := thirdStage(squaredBoxes, width, height, img, onetModel)`](https://github.com/modanesh/GoFaceRec/blob/main/main.go?plain=1#L1676)
 
-After the face detection stage, there is a face alignment. The function to perform face alignment is [`pImgs := alignFace(thirdPickedBoxes, pickedPoints, img)`](https://github.com/modanesh/GoFaceRec/blob/main/main.go?plain=1#L1666) which imitates the steps from [here](https://github.com/pterhoer/QMagFace/blob/main/preprocessing/insightface/src/face_preprocess.py#L195).
+You may download the models from the available [Google Drive URLs](#converting-models).
 
-Finally, once the face is detected and aligned, the recognition phase can start. It happens at this line: [`recognizeFace(pImgs, qmfModel, regEmbeddings, bSize, regFiles)`](https://github.com/modanesh/GoFaceRec/blob/main/main.go?plain=1#L1675).
+After the face detection stage, there is a face alignment. The function to perform face alignment is [`pImgs := alignFace(thirdPickedBoxes, pickedPoints, img)`](https://github.com/modanesh/GoFaceRec/blob/main/main.go?plain=1#L1685) which imitates the steps from [here](https://github.com/pterhoer/QMagFace/blob/main/preprocessing/insightface/src/face_preprocess.py#L195).
+
+Finally, once the face is detected and aligned, the recognition phase can start. It happens at this line: [`recognizeFace(pImgs, qmfModel, regEmbeddings, bSize, regFiles)`](https://github.com/modanesh/GoFaceRec/blob/main/main.go?plain=1#L1694).
 
 Use the bellow command to run the code:
 ```shell
@@ -92,6 +100,6 @@ For example, the function [`adjustInput()`](https://github.com/modanesh/GoFaceRe
 In contrast, these type conversions are done pretty easy and fast in Python.
 
 ### ToDo
-- [X] Check why recognition model takes so long for a forward pass. In Python, it takes about 0.5 milliseconds while in Go it takes about 5500 milliseconds. For the first run, in Go, the session instantiation takes a long time. For next runs, Go runs pretty fast. [Take a look at this issue](https://github.com/galeone/tfgo/issues/4). The `fakeRun()` function is for that purpose.
+- [X] Check why recognition model takes so long for a forward pass. In Python, it takes about 0.5 milliseconds while in Go it takes about 5500 milliseconds. For the first run, in Go, the session instantiation takes a long time. For next runs, Go runs pretty fast. [Take a look at this issue](https://github.com/galeone/tfgo/issues/4). The [`fakeRun()`](https://github.com/modanesh/GoFaceRec/blob/main/main.go?plain=1#L1582) function is for that purpose.
+- [X] Upload the models
 - [ ] Create a Go package
-- [ ] Upload the models
